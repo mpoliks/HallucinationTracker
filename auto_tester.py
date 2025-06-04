@@ -7,18 +7,12 @@ import json
 import logging
 import random
 import signal
-import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
-
-# Platform-specific imports
-try:
-    import select
-    HAS_SELECT = True
-except ImportError:
-    HAS_SELECT = False  # Windows doesn't have select for pipes
+import pexpect
+import re
 
 class HallucinationTrackerAutoTester:
     def __init__(self):
@@ -33,15 +27,24 @@ class HallucinationTrackerAutoTester:
         # Setup logging
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s | %(levelname)-7s | %(message)s',
+            format="%(asctime)s | %(levelname)-7s | %(message)s",
             handlers=[
-                logging.FileHandler('auto_tester.log'),
+                logging.FileHandler("auto_tester.log"),
                 logging.StreamHandler()
             ]
         )
         
+        # Load dataset
+        self.load_dataset()
+        
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
+        
+    def signal_handler(self, signum, frame):
+        """Handle Ctrl+C gracefully"""
+        logging.info("\n🛑 Received interrupt signal. Shutting down gracefully...")
+        self.show_final_stats()
+        sys.exit(0)
         
     def load_dataset(self):
         """Load questions from the evaluation dataset"""
@@ -58,20 +61,17 @@ class HallucinationTrackerAutoTester:
                                 for content in content_list:
                                     if 'text' in content:
                                         self.questions.append(content['text'])
-                    else:
+                    elif 'humanMessage' in data:
                         # Simple format
-                        if 'question' in data:
-                            self.questions.append(data['question'])
-                        elif 'user' in data:
-                            self.questions.append(data['user'])
+                        self.questions.append(data['humanMessage'])
             
             logging.info(f"Loaded {len(self.questions)} questions from dataset")
             
         except FileNotFoundError:
             logging.error(f"Dataset file not found: {self.dataset_path}")
             sys.exit(1)
-        except json.JSONDecodeError as e:
-            logging.error(f"Error parsing dataset: {e}")
+        except Exception as e:
+            logging.error(f"Error loading dataset: {e}")
             sys.exit(1)
     
     def get_random_question(self) -> str:
@@ -79,205 +79,214 @@ class HallucinationTrackerAutoTester:
         return random.choice(self.questions)
     
     def should_give_positive_feedback(self) -> bool:
-        """
-        Dynamically adjust feedback to maintain ~95% positive rate
-        """
+        """Determine if positive feedback should be given to maintain ~95% rate"""
         if self.total_questions == 0:
-            return True  # Start with positive
+            return True
         
         current_rate = self.positive_feedback_given / self.total_questions
+        target_rate = self.target_positive_rate
         
-        # If we're below target, increase positive probability
-        # If we're above target, decrease positive probability
-        adjusted_rate = self.target_positive_rate + (self.target_positive_rate - current_rate) * 0.5
-        adjusted_rate = max(0.1, min(0.99, adjusted_rate))  # Keep between 10% and 99%
-        
+        # Dynamic adjustment to maintain target rate
+        adjusted_rate = target_rate + (target_rate - current_rate) * 0.5
         return random.random() < adjusted_rate
-    
-    def run_chat_session(self) -> bool:
-        """
-        Run a single chat session with the bot
-        Returns True if successful, False if AWS token expired
-        """
-        try:
-            # Start the chat bot process
-            process = subprocess.Popen(
-                [sys.executable, "script.py"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Get a random question
-            question = self.get_random_question()
-            logging.info(f"Session {self.session_count + 1}: Asking: {question}")
-            
-            # Calculate and provide feedback
-            should_give_positive = self.should_give_positive_feedback()
-            feedback = "y" if should_give_positive else "n"
-            
-            # Prepare the complete input sequence
-            input_sequence = f"{question}\n{feedback}\nexit\n"
-            
-            # Execute the complete interaction
-            try:
-                stdout, stderr = process.communicate(input=input_sequence, timeout=60)
-            except subprocess.TimeoutExpired:
-                logging.warning("Session timed out, terminating...")
-                process.kill()
-                stdout, stderr = process.communicate()
-                return True  # Continue trying
-            
-            # Extract and log the assistant response
-            bot_response = self.extract_assistant_response(stdout)
-            if bot_response:
-                # Truncate for clean logging
-                truncated_response = (bot_response[:200] + "...") if len(bot_response) > 200 else bot_response
-                logging.info(f"🤖 Bot Response: {truncated_response}")
-            else:
-                logging.info("🤖 Bot Response: [Could not capture response]")
-            
-            # Extract and log SDK and guardrails metrics
-            self.extract_and_log_metrics(stderr)
-            
-            # Update stats
-            self.session_count += 1
-            self.total_questions += 1
-            if should_give_positive:
-                self.positive_feedback_given += 1
-                
-            current_rate = (self.positive_feedback_given / self.total_questions) * 100
-            logging.info(f"Providing {'positive' if should_give_positive else 'negative'} feedback (running rate: {current_rate:.1f}%)")
-            
-            logging.info(f"Session {self.total_questions} completed successfully")
-            logging.info("✅ New user context created for next session")
-            
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error in chat session: {e}")
-            return True  # Continue trying unless it's a token issue
     
     def extract_assistant_response(self, output: str) -> str:
         """Extract the assistant response from the chat output"""
         try:
+            # Look for the ASSISTANT box in the output
             lines = output.split('\n')
             in_assistant_box = False
-            assistant_response_lines = []
+            response_lines = []
             
             for line in lines:
-                # Look for the ASSISTANT box header
                 if "ASSISTANT" in line and "│" in line:
                     in_assistant_box = True
                     continue
-                # Look for the end of the box
                 elif line.strip().startswith("└") and in_assistant_box:
                     break
-                # Collect lines inside the assistant box
-                elif in_assistant_box and line.startswith("│"):
-                    # Remove the box formatting (│ and any leading spaces)
-                    clean_line = line[1:].strip() if len(line) > 1 else ""
-                    # Skip lines that are just box formatting (dashes, etc.)
-                    if clean_line and not clean_line.startswith("─") and clean_line != "│":
-                        assistant_response_lines.append(clean_line)
+                elif in_assistant_box and "│" in line:
+                    # Extract text between │ characters
+                    content = line.split("│")
+                    if len(content) >= 3:
+                        text = content[1].strip()
+                        if text:
+                            response_lines.append(text)
             
-            if assistant_response_lines:
-                # Join the lines and clean up any remaining formatting artifacts
-                response_text = " ".join(assistant_response_lines).strip()
-                # Remove any remaining │ characters that might have been missed
-                response_text = response_text.replace("│", "").strip()
-                # Clean up multiple spaces
-                response_text = " ".join(response_text.split())
-                return response_text
+            if response_lines:
+                response = " ".join(response_lines)
+                # Clean up formatting artifacts
+                response = re.sub(r'\s+', ' ', response)
+                return response[:300] + "..." if len(response) > 300 else response
             
-            return ""
+            return "[Could not capture response]"
             
         except Exception as e:
-            logging.warning(f"Error extracting response: {e}")
-            return ""
+            logging.error(f"Error extracting response: {e}")
+            return "[Could not parse response]"
     
-    def extract_and_log_metrics(self, stderr_output: str) -> None:
-        """Extract and log SDK and guardrails metrics from stderr output"""
-        if not stderr_output:
-            return
-            
-        lines = stderr_output.split('\n')
+    def extract_metrics(self, output: str) -> dict:
+        """Extract LaunchDarkly and guardrails metrics from output"""
+        metrics = {}
         
-        for line in lines:
-            # Extract LaunchDarkly AI tracked metrics
-            if "LaunchDarkly AI tracked metrics:" in line:
-                logging.info(f"📊 SDK Metrics: {line.split('LaunchDarkly AI tracked metrics: ')[1]}")
-            
-            # Extract accuracy metric (grounding score)
-            elif "Sent accuracy metric to LaunchDarkly:" in line:
-                accuracy = line.split('Sent accuracy metric to LaunchDarkly: ')[1]
-                logging.info(f"🎯 Accuracy (Grounding): {accuracy}")
-            
-            # Extract relevance metric
-            elif "Sent relevance metric to LaunchDarkly:" in line:
-                relevance = line.split('Sent relevance metric to LaunchDarkly: ')[1]
-                logging.info(f"🔍 Relevance: {relevance}")
-            
-            # Extract other potentially useful metrics
-            elif "Knowledge Base ID:" in line:
-                kb_info = line.split('| INFO    | ')[1] if '| INFO    |' in line else line
-                logging.info(f"📚 RAG: {kb_info.strip()}")
-                
-            # Log any error messages
-            elif "| ERROR   |" in line:
-                error_msg = line.split('| ERROR   | ')[1] if '| ERROR   |' in line else line
-                logging.warning(f"❌ Error: {error_msg.strip()}")
+        # Extract LaunchDarkly AI tracked metrics
+        ld_pattern = r"LaunchDarkly AI tracked metrics: (.+)"
+        ld_match = re.search(ld_pattern, output)
+        if ld_match:
+            metrics['sdk_metrics'] = ld_match.group(1)
+        
+        # Extract accuracy metric
+        accuracy_pattern = r"Sent accuracy metric to LaunchDarkly: ([\d.]+)%"
+        accuracy_match = re.search(accuracy_pattern, output)
+        if accuracy_match:
+            metrics['accuracy'] = float(accuracy_match.group(1))
+        
+        # Extract relevance metric
+        relevance_pattern = r"Sent relevance metric to LaunchDarkly: ([\d.]+)%"
+        relevance_match = re.search(relevance_pattern, output)
+        if relevance_match:
+            metrics['relevance'] = float(relevance_match.group(1))
+        
+        return metrics
     
-    def signal_handler(self, signum, frame):
-        """Handle Ctrl+C gracefully"""
-        logging.info("\n🛑 Received shutdown signal...")
-        self.print_final_stats()
-        sys.exit(0)
+    def run_chat_session(self) -> bool:
+        """
+        Run a single chat session with the bot using pexpect
+        Returns True if successful, False if error occurred
+        """
+        try:
+            self.session_count += 1
+            
+            # Start the script with pexpect
+            child = pexpect.spawn('python script.py 2>&1', timeout=30, encoding='utf-8')
+            
+            # Wait for the ready prompt
+            child.expect("You:")
+            
+            # Get a random question
+            question = self.get_random_question()
+            logging.info(f"Session {self.session_count}: Asking: {question}")
+            
+            # Send the question
+            child.sendline(question)
+            
+            # Wait for the assistant response and feedback prompt
+            child.expect("Your answer:")
+            
+            # Capture all output so far (now includes stderr)
+            full_output = child.before + child.after
+            
+            # Extract the bot response
+            bot_response = self.extract_assistant_response(full_output)
+            logging.info(f"🤖 Bot Response: {bot_response}")
+            
+            # Extract metrics
+            metrics = self.extract_metrics(full_output)
+            
+            # Log SDK metrics if available
+            if 'sdk_metrics' in metrics:
+                logging.info(f"📊 SDK Metrics: {metrics['sdk_metrics']}")
+            
+            # Log accuracy if available
+            if 'accuracy' in metrics:
+                logging.info(f"🎯 Accuracy Score: {metrics['accuracy']:.1f}%")
+            
+            # Log relevance if available
+            if 'relevance' in metrics:
+                logging.info(f"🔍 Relevance Score: {metrics['relevance']:.1f}%")
+            
+            # Decide on feedback
+            should_give_positive = self.should_give_positive_feedback()
+            feedback = "y" if should_give_positive else "n"
+            
+            # Update stats
+            self.total_questions += 1
+            if should_give_positive:
+                self.positive_feedback_given += 1
+            
+            current_rate = (self.positive_feedback_given / self.total_questions) * 100
+            logging.info(f"Providing {'positive' if should_give_positive else 'negative'} feedback (running rate: {current_rate:.1f}%)")
+            
+            # Send feedback
+            child.sendline(feedback)
+            
+            # Send exit command
+            child.expect("You:")
+            child.sendline("exit")
+            
+            # Wait for process to complete
+            child.expect(pexpect.EOF, timeout=10)
+            child.close()
+            
+            logging.info(f"Session {self.session_count} completed successfully")
+            logging.info("✅ New user context created for next session")
+            
+            return True
+            
+        except pexpect.TIMEOUT:
+            logging.warning("Session timed out")
+            try:
+                child.close(force=True)
+            except:
+                pass
+            return True  # Continue with next session
+            
+        except pexpect.EOF:
+            logging.warning("Process ended unexpectedly")
+            try:
+                child.close()
+            except:
+                pass
+            return True  # Continue with next session
+            
+        except Exception as e:
+            logging.error(f"Error in chat session: {e}")
+            try:
+                child.close(force=True)
+            except:
+                pass
+            return True  # Continue with next session
     
-    def print_final_stats(self):
-        """Print final statistics"""
+    def show_final_stats(self):
+        """Show final statistics"""
         if self.total_questions > 0:
             final_rate = (self.positive_feedback_given / self.total_questions) * 100
-            logging.info("=" * 60)
-            logging.info(f"📊 FINAL STATISTICS:")
-            logging.info(f"   Sessions completed: {self.session_count}")
-            logging.info(f"   Total questions: {self.total_questions}")
-            logging.info(f"   Positive feedback: {self.positive_feedback_given}")
-            logging.info(f"   Final positive rate: {final_rate:.1f}%")
-            logging.info(f"   Target rate: {self.target_positive_rate * 100:.1f}%")
-            logging.info("=" * 60)
+            logging.info("="*60)
+            logging.info("📊 FINAL AUTO TESTER STATISTICS")
+            logging.info("="*60)
+            logging.info(f"Total sessions completed: {self.session_count}")
+            logging.info(f"Total questions asked: {self.total_questions}")
+            logging.info(f"Positive feedback given: {self.positive_feedback_given}")
+            logging.info(f"Final positive rate: {final_rate:.1f}%")
+            logging.info(f"Target positive rate: {self.target_positive_rate*100:.1f}%")
+            logging.info("="*60)
     
     def run(self):
         """Main execution loop"""
-        self.load_dataset()
-        
-        logging.info("🚀 Starting HallucinationTracker Auto Tester")
+        logging.info(f"🚀 Starting HallucinationTracker Auto Tester")
         logging.info(f"📊 Dataset: {len(self.questions)} questions loaded")
-        logging.info(f"😊 Target positive rate: {self.target_positive_rate * 100:.0f}%")
+        logging.info(f"😊 Target positive rate: {self.target_positive_rate*100:.0f}%")
         logging.info(f"🔄 Running sessions every {self.session_interval} seconds...")
         logging.info("Press Ctrl+C to stop")
+        logging.info("")
         
         try:
             while True:
-                logging.info("\n" + "=" * 60)
+                logging.info("="*60)
                 logging.info(f"Starting session {self.session_count + 1}")
                 
                 success = self.run_chat_session()
                 
                 if not success:
-                    logging.error("Failed to run session - stopping auto tester")
+                    logging.error("Session failed, stopping auto tester")
                     break
                 
-                self.session_count += 1
                 logging.info(f"✅ Session {self.session_count} complete. Waiting {self.session_interval} seconds...")
-                
                 time.sleep(self.session_interval)
                 
         except KeyboardInterrupt:
-            self.signal_handler(signal.SIGINT, None)
+            logging.info("\n🛑 Received interrupt signal")
         finally:
-            self.print_final_stats()
+            self.show_final_stats()
 
 if __name__ == "__main__":
     tester = HallucinationTrackerAutoTester()
