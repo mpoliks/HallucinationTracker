@@ -32,9 +32,10 @@ class AutoTester:
     def __init__(self, dataset_path: str = "samples/togglebank_eval_dataset_bedrock.jsonl"):
         self.dataset_path = dataset_path
         self.questions = self.load_questions()
-        self.positive_feedback_rate = 0.90  # 90% positive feedback
+        self.target_positive_rate = 0.95  # Target 95% positive feedback
         self.session_count = 0
         self.total_questions = 0
+        self.positive_feedback_given = 0
         self.running = True
         
         # Setup signal handler for graceful shutdown
@@ -88,8 +89,25 @@ class AutoTester:
         return random.choice(self.questions)
     
     def should_give_positive_feedback(self) -> bool:
-        """Determine if we should give positive feedback (90% rate)"""
-        return random.random() < self.positive_feedback_rate
+        """
+        Determine if we should give positive feedback
+        Uses dynamic adjustment to maintain ~95% positive rate
+        """
+        if self.total_questions == 0:
+            # First question, use target rate
+            return random.random() < self.target_positive_rate
+        
+        # Calculate current positive rate
+        current_rate = self.positive_feedback_given / self.total_questions
+        
+        # Adjust probability based on how far we are from target
+        adjustment = (self.target_positive_rate - current_rate) * 0.5  # Gentle adjustment
+        adjusted_rate = self.target_positive_rate + adjustment
+        
+        # Keep within reasonable bounds
+        adjusted_rate = max(0.8, min(1.0, adjusted_rate))
+        
+        return random.random() < adjusted_rate
     
     def run_chat_session(self) -> bool:
         """
@@ -148,7 +166,13 @@ class AutoTester:
             # Provide feedback
             feedback = "y" if self.should_give_positive_feedback() else "n"
             feedback_text = "positive" if feedback == "y" else "negative"
-            logging.info(f"Providing {feedback_text} feedback")
+            
+            # Calculate current stats for logging
+            temp_positive = self.positive_feedback_given + (1 if feedback == "y" else 0)
+            temp_total = self.total_questions + 1
+            current_rate = (temp_positive / temp_total) * 100
+            
+            logging.info(f"Providing {feedback_text} feedback (running rate: {current_rate:.1f}%)")
             
             process.stdin.write(f"{feedback}\n")
             process.stdin.flush()
@@ -167,7 +191,12 @@ class AutoTester:
                 process.wait(timeout=2)
             
             self.total_questions += 1
+            if feedback == "y":
+                self.positive_feedback_given += 1
             logging.info(f"Session {self.session_count + 1} completed successfully")
+            
+            # Log user context creation confirmation
+            logging.info(f"✅ New user context created for next session")
             return True
             
         except Exception as e:
@@ -189,7 +218,7 @@ class AutoTester:
         """Main execution loop"""
         logging.info("🚀 Starting HallucinationTracker Auto Tester")
         logging.info(f"📊 Dataset: {len(self.questions)} questions loaded")
-        logging.info(f"😊 Positive feedback rate: {self.positive_feedback_rate*100:.0f}%")
+        logging.info(f"😊 Target positive rate: {self.target_positive_rate*100:.0f}%")
         logging.info("🔄 Running sessions every 10 seconds...")
         logging.info("Press Ctrl+C to stop")
         
@@ -230,6 +259,10 @@ class AutoTester:
         logging.info("📋 AUTO TESTER SUMMARY")
         logging.info(f"Sessions completed: {self.session_count}")
         logging.info(f"Questions asked: {self.total_questions}")
+        logging.info(f"Positive feedback given: {self.positive_feedback_given}")
+        if self.total_questions > 0:
+            actual_rate = (self.positive_feedback_given / self.total_questions) * 100
+            logging.info(f"Actual positive rate: {actual_rate:.1f}% (target: {self.target_positive_rate*100:.0f}%)")
         logging.info(f"Average questions per session: {self.total_questions/max(self.session_count,1):.1f}")
         logging.info("👋 Auto tester stopped.")
 
