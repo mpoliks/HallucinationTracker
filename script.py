@@ -71,7 +71,7 @@ def s3_get_passages(question: str, kb_id: str) -> str:
             },
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
-                    'numberOfResults': 10  # Increased from 5 to get more comprehensive results
+                    'numberOfResults': 20  # Increased from 10 to 20 for more comprehensive context
                 }
             }
         )
