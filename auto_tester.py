@@ -121,49 +121,14 @@ class AutoTester:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
+                text=True
             )
-            
-            # Wait a moment for the bot to initialize
-            time.sleep(2)
-            
-            # Check if process is still running (initialization success)
-            if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                if "ExpiredTokenException" in stderr or "expired" in stderr.lower():
-                    logging.error("AWS tokens expired. Please refresh your credentials.")
-                    return False
-                elif "Missing" in stderr and "LaunchDarkly" in stderr:
-                    logging.error("LaunchDarkly configuration issue. Check your AI config.")
-                    return False
-                else:
-                    logging.error(f"Bot failed to start: {stderr}")
-                    return False
             
             # Get a random question
             question = self.get_random_question()
             logging.info(f"Session {self.session_count + 1}: Asking: {question}")
             
-            # Send the question
-            process.stdin.write(f"{question}\n")
-            process.stdin.flush()
-            
-            # Wait for response (give it time to process)
-            time.sleep(8)
-            
-            # Check if process died during processing
-            if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                if "ExpiredTokenException" in stderr or "expired" in stderr.lower():
-                    logging.error("AWS tokens expired during processing.")
-                    return False
-                else:
-                    logging.warning(f"Process died during processing: {stderr}")
-                    return True  # Continue trying
-            
-            # Provide feedback
+            # Prepare the full interaction: question + feedback + exit
             feedback = "y" if self.should_give_positive_feedback() else "n"
             feedback_text = "positive" if feedback == "y" else "negative"
             
@@ -172,33 +137,40 @@ class AutoTester:
             temp_total = self.total_questions + 1
             current_rate = (temp_positive / temp_total) * 100
             
-            logging.info(f"Providing {feedback_text} feedback (running rate: {current_rate:.1f}%)")
+            # Send the complete interaction
+            input_sequence = f"{question}\n{feedback}\nexit\n"
             
-            process.stdin.write(f"{feedback}\n")
-            process.stdin.flush()
-            
-            # Wait a moment then exit the chat
-            time.sleep(2)
-            process.stdin.write("exit\n")
-            process.stdin.flush()
-            
-            # Wait for clean exit
             try:
-                process.wait(timeout=5)
+                # Run the complete interaction with timeout
+                stdout, stderr = process.communicate(input=input_sequence, timeout=30)
+                
+                # Check for errors
+                if "ExpiredTokenException" in stderr or "expired" in stderr.lower():
+                    logging.error("AWS tokens expired. Please refresh your credentials.")
+                    return False
+                elif "Missing" in stderr and "LaunchDarkly" in stderr:
+                    logging.error("LaunchDarkly configuration issue. Check your AI config.")
+                    return False
+                elif process.returncode != 0 and stderr:
+                    logging.warning(f"Process error: {stderr[:200]}...")
+                
+                # Extract assistant response from stdout
+                self.extract_and_log_response(stdout)
+                
+                logging.info(f"Providing {feedback_text} feedback (running rate: {current_rate:.1f}%)")
+                
+                self.total_questions += 1
+                if feedback == "y":
+                    self.positive_feedback_given += 1
+                logging.info(f"Session {self.session_count + 1} completed successfully")
+                logging.info(f"✅ New user context created for next session")
+                return True
+                
             except subprocess.TimeoutExpired:
-                logging.warning("Process didn't exit cleanly, terminating...")
-                process.terminate()
-                process.wait(timeout=2)
-            
-            self.total_questions += 1
-            if feedback == "y":
-                self.positive_feedback_given += 1
-            logging.info(f"Session {self.session_count + 1} completed successfully")
-            
-            # Log user context creation confirmation
-            logging.info(f"✅ New user context created for next session")
-            return True
-            
+                logging.warning("Session timed out, terminating...")
+                process.kill()
+                return True
+                
         except Exception as e:
             logging.error(f"Error in chat session: {e}")
             try:
@@ -208,6 +180,43 @@ class AutoTester:
             except:
                 pass
             return True  # Continue trying unless it's a token issue
+    
+    def extract_and_log_response(self, output: str):
+        """Extract and log the assistant's response from the chat output"""
+        try:
+            lines = output.split('\n')
+            in_assistant_box = False
+            assistant_response = []
+            
+            for line in lines:
+                # Look for the ASSISTANT box header
+                if "ASSISTANT" in line and "│" in line:
+                    in_assistant_box = True
+                    continue
+                # Look for the end of the box
+                elif line.strip().startswith("└") and in_assistant_box:
+                    break
+                # Collect lines inside the assistant box
+                elif in_assistant_box and line.startswith("│"):
+                    # Remove the box formatting
+                    clean_line = line[2:].rstrip() if len(line) > 2 else ""
+                    if clean_line:
+                        assistant_response.append(clean_line)
+            
+            if assistant_response:
+                response_text = " ".join(assistant_response).strip()
+                if response_text:
+                    # Truncate long responses for cleaner logging
+                    if len(response_text) > 300:
+                        response_text = response_text[:300] + "..."
+                    logging.info(f"🤖 Bot Response: {response_text}")
+                else:
+                    logging.info("🤖 Bot Response: [Empty response]")
+            else:
+                logging.info("🤖 Bot Response: [Could not parse response]")
+                
+        except Exception as e:
+            logging.info(f"🤖 Bot Response: [Error parsing: {e}]")
     
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C gracefully"""
