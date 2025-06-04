@@ -1,0 +1,7 @@
+What is the procedure to do I set up balance alerts?
+
+What is the procedure to do I set up balance alerts?
+1. Save preferences; alerts are sent in real time when the threshold is crossed.
+2. Choose threshold type: fixed dollar amount or percentage of average balance.
+3. Go to Settings ▸ Alerts ▸ Balance.
+4. Select delivery method: push notification, SMS, or email.

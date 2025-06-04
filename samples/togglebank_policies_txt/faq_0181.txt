@@ -1,0 +1,6 @@
+What is the procedure to do I enable biometric login?
+
+What is the procedure to do I enable biometric login?
+1. Next time you open the app, you can log in with biometrics instead of a password.
+2. Authenticate with your device’s biometrics to confirm.
+3. In the mobile app go to Settings ▸ Login & Security.

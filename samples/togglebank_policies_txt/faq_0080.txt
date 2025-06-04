@@ -1,0 +1,6 @@
+Could you explain what is the process for setting a travel notice?
+
+Could you explain what is the process for setting a travel notice?
+1. In the mobile app go to Card Controls ▸ Travel Notice.
+2. You’ll receive an email confirmation; notices can be edited or canceled anytime.
+3. Enter destination country, start date, and end date (up to 90 days).

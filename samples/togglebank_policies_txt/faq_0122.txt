@@ -1,0 +1,8 @@
+Could you explain what are the daily ATM withdrawal limits?
+
+Could you explain what are the daily ATM withdrawal limits?
+1. Gold tier: $1 000
+2. Limits reset at 12:01 AM local time; increase requests can be made in‑app under Card Controls ▸ Temporary Limit.
+3. Bronze & Silver tiers: $500
+4. Platinum tier: $1 500
+5. Diamond tier: $3 000

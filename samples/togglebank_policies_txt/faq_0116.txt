@@ -1,0 +1,7 @@
+How do I set up balance alerts?
+
+How do I set up balance alerts?
+1. Go to Settings ▸ Alerts ▸ Balance.
+2. Choose threshold type: fixed dollar amount or percentage of average balance.
+3. Select delivery method: push notification, SMS, or email.
+4. If you need further assistance, contact ToggleSupport via chat 24/7.

@@ -1,0 +1,8 @@
+Could you explain what is ToggleBank’s policy on wire transfer cut‑off times?
+
+Could you explain what is ToggleBank’s policy on wire transfer cut‑off times?
+1. Domestic wires: 5 PM ET on business days.
+2. International wires: 3 PM ET.
+3. Requests submitted after cut‑off are processed the next business day.
+4. Outgoing wire fees vary by tier; incoming wires are free for Gold and above.
+5. If you need further assistance, contact ToggleSupport via chat 24/7.
