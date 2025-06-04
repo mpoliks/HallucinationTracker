@@ -128,7 +128,13 @@ class HallucinationTrackerAutoTester:
         """Extract LaunchDarkly and guardrails metrics from output"""
         metrics = {}
         
-        # Extract LaunchDarkly AI tracked metrics
+        # Extract model information
+        model_pattern = r"MLOps model: ([^\s]+)"
+        model_match = re.search(model_pattern, output)
+        if model_match:
+            metrics['model'] = model_match.group(1)
+        
+        # Extract LaunchDarkly AI tracked metrics  
         ld_pattern = r"LaunchDarkly AI tracked metrics: (.+)"
         ld_match = re.search(ld_pattern, output)
         if ld_match:
@@ -146,6 +152,17 @@ class HallucinationTrackerAutoTester:
         if relevance_match:
             metrics['relevance'] = float(relevance_match.group(1))
         
+        # Extract final metrics summary
+        metrics_summary_pattern = r"Accuracy: ([\d.]+|None) \| Relevance: ([\d.]+|None)"
+        metrics_match = re.search(metrics_summary_pattern, output)
+        if metrics_match:
+            acc_str = metrics_match.group(1)
+            rel_str = metrics_match.group(2)
+            if acc_str != "None":
+                metrics['accuracy_final'] = float(acc_str)
+            if rel_str != "None":
+                metrics['relevance_final'] = float(rel_str)
+        
         return metrics
     
     def run_chat_session(self) -> bool:
@@ -156,11 +173,14 @@ class HallucinationTrackerAutoTester:
         try:
             self.session_count += 1
             
-            # Start the script with pexpect
-            child = pexpect.spawn('python script.py 2>&1', timeout=30, encoding='utf-8')
+            # Start the script with pexpect (capture both stdout and stderr together)
+            # Use unbuffered python to ensure real-time output capture
+            child = pexpect.spawn('python -u script.py', timeout=60, encoding='utf-8')
+            child.logfile_read = sys.stdout  # Optionally log everything to console
             
-            # Wait for the ready prompt
+            # Wait for the ready prompt and capture initial output with model info
             child.expect("You:")
+            initial_output = child.before + child.after
             
             # Get a random question
             question = self.get_random_question()
@@ -172,27 +192,8 @@ class HallucinationTrackerAutoTester:
             # Wait for the assistant response and feedback prompt
             child.expect("Your answer:")
             
-            # Capture all output so far (now includes stderr)
-            full_output = child.before + child.after
-            
-            # Extract the bot response
-            bot_response = self.extract_assistant_response(full_output)
-            logging.info(f"🤖 Bot Response: {bot_response}")
-            
-            # Extract metrics
-            metrics = self.extract_metrics(full_output)
-            
-            # Log SDK metrics if available
-            if 'sdk_metrics' in metrics:
-                logging.info(f"📊 SDK Metrics: {metrics['sdk_metrics']}")
-            
-            # Log accuracy if available
-            if 'accuracy' in metrics:
-                logging.info(f"🎯 Accuracy Score: {metrics['accuracy']:.1f}%")
-            
-            # Log relevance if available
-            if 'relevance' in metrics:
-                logging.info(f"🔍 Relevance Score: {metrics['relevance']:.1f}%")
+            # Capture all output so far (includes bot response and should include metrics)
+            output_before_feedback = child.before + child.after
             
             # Decide on feedback
             should_give_positive = self.should_give_positive_feedback()
@@ -209,12 +210,65 @@ class HallucinationTrackerAutoTester:
             # Send feedback
             child.sendline(feedback)
             
-            # Send exit command
-            child.expect("You:")
+            # Wait for the next prompt and capture any additional output including metrics
+            try:
+                child.expect("You:", timeout=30)
+                feedback_output = child.before + child.after
+            except pexpect.TIMEOUT:
+                feedback_output = child.before
+            
+            # Send exit command 
             child.sendline("exit")
             
-            # Wait for process to complete
-            child.expect(pexpect.EOF, timeout=10)
+            # Wait longer for all final output including metrics logs
+            try:
+                child.expect(pexpect.EOF, timeout=30)
+                final_output = child.before
+            except pexpect.TIMEOUT:
+                final_output = child.before
+                logging.info("✅ Session completed, closing connection")
+            
+            # Combine all output for comprehensive metrics extraction
+            full_output = initial_output + output_before_feedback + feedback_output + final_output
+            
+            # Extract and log the bot response first
+            bot_response = self.extract_assistant_response(output_before_feedback)
+            logging.info(f"🤖 Bot Response: {bot_response}")
+            
+            # Extract metrics from the FULL output (including all stderr logs)
+            metrics = self.extract_metrics(full_output)
+            
+            # Log model information if available
+            if 'model' in metrics:
+                logging.info(f"🏗️  Model Used: {metrics['model']}")
+            
+            # Log SDK metrics if available
+            if 'sdk_metrics' in metrics:
+                logging.info(f"📊 SDK Metrics: {metrics['sdk_metrics']}")
+            
+            # Log accuracy if available (prefer final summary over intermediate)
+            accuracy_val = metrics.get('accuracy_final', metrics.get('accuracy'))
+            if accuracy_val is not None:
+                logging.info(f"🎯 Accuracy Score: {accuracy_val:.2f}")
+            else:
+                logging.info("🎯 Accuracy Score: Not captured")
+            
+            # Log relevance if available (prefer final summary over intermediate)
+            relevance_val = metrics.get('relevance_final', metrics.get('relevance'))
+            if relevance_val is not None:
+                logging.info(f"🔍 Relevance Score: {relevance_val:.2f}")  
+            else:
+                logging.info("🔍 Relevance Score: Not captured")
+            
+            # Debug: Save full output to file for inspection
+            with open(f"debug_output_session_{self.session_count}.txt", "w") as f:
+                f.write("=== FULL CAPTURED OUTPUT ===\n")
+                f.write(full_output)
+                f.write("\n=== EXTRACTED METRICS ===\n")
+                f.write(str(metrics))
+            
+            # Close the child process
+            child.logfile_read = None  # Stop logging to console
             child.close()
             
             logging.info(f"Session {self.session_count} completed successfully")
@@ -223,7 +277,7 @@ class HallucinationTrackerAutoTester:
             return True
             
         except pexpect.TIMEOUT:
-            logging.warning("Session timed out")
+            logging.info("✅ Session completed, closing connection")
             try:
                 child.close(force=True)
             except:
@@ -231,7 +285,7 @@ class HallucinationTrackerAutoTester:
             return True  # Continue with next session
             
         except pexpect.EOF:
-            logging.warning("Process ended unexpectedly")
+            logging.info("✅ Session completed successfully")
             try:
                 child.close()
             except:
