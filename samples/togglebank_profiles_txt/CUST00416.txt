@@ -1,9 +1,0 @@
-Name: Casey S.
-City: San Diego, CA
-Account Tier: Bronze
-Account Since: 2022-01-22
-Last Login: 2025-05-17
-Average Balance: <1k
-Rewards Points: 37504
-Preferred Channel: web
-Language Preference: en.

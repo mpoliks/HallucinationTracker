@@ -1,9 +1,0 @@
-Name: Cameron U.
-City: Dallas, TX
-Account Tier: Silver
-Account Since: 2022-10-14
-Last Login: 2025-05-27
-Average Balance: <1k
-Rewards Points: 24458
-Preferred Channel: mobile
-Language Preference: fr.

@@ -1,9 +1,0 @@
-Name: Skyler C.
-City: Boston, MA
-Account Tier: Bronze
-Account Since: 2021-03-14
-Last Login: 2025-05-06
-Average Balance: <1k
-Rewards Points: 45155
-Preferred Channel: phone
-Language Preference: en.

@@ -1,9 +1,0 @@
-Name: Alex D.
-City: Atlanta, GA
-Account Tier: Bronze
-Account Since: 2017-03-01
-Last Login: 2025-05-15
-Average Balance: <1k
-Rewards Points: 14517
-Preferred Channel: mobile
-Language Preference: fr.

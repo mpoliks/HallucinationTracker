@@ -1,9 +1,0 @@
-Name: Sydney S.
-City: San Diego, CA
-Account Tier: Silver
-Account Since: 2022-10-12
-Last Login: 2025-05-24
-Average Balance: <1k
-Rewards Points: 38854
-Preferred Channel: web
-Language Preference: de.

@@ -1,9 +1,0 @@
-Name: Skyler A.
-City: Seattle, WA
-Account Tier: Silver
-Account Since: 2023-07-03
-Last Login: 2025-05-28
-Average Balance: 1k-10k
-Rewards Points: 22536
-Preferred Channel: branch
-Language Preference: de.

@@ -1,9 +1,0 @@
-Name: Payton L.
-City: Denver, CO
-Account Tier: Gold
-Account Since: 2019-01-02
-Last Login: 2025-05-26
-Average Balance: <1k
-Rewards Points: 22596
-Preferred Channel: web
-Language Preference: en.

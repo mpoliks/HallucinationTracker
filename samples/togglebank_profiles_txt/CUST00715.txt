@@ -1,9 +1,0 @@
-Name: Dana U.
-City: Boston, MA
-Account Tier: Bronze
-Account Since: 2023-04-11
-Last Login: 2025-05-02
-Average Balance: <1k
-Rewards Points: 32645
-Preferred Channel: mobile
-Language Preference: es.

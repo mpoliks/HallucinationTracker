@@ -1,9 +1,0 @@
-Name: Sydney S.
-City: Boston, MA
-Account Tier: Bronze
-Account Since: 2022-01-01
-Last Login: 2025-05-24
-Average Balance: 100k+
-Rewards Points: 22126
-Preferred Channel: mobile
-Language Preference: en.

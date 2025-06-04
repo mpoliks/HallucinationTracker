@@ -1,9 +1,0 @@
-Name: Dana H.
-City: Boston, MA
-Account Tier: Gold
-Account Since: 2021-12-01
-Last Login: 2025-05-09
-Average Balance: 10k-50k
-Rewards Points: 25695
-Preferred Channel: web
-Language Preference: fr.

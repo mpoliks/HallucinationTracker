@@ -1,9 +1,0 @@
-Name: Quinn A.
-City: Seattle, WA
-Account Tier: Bronze
-Account Since: 2017-02-26
-Last Login: 2025-05-22
-Average Balance: <1k
-Rewards Points: 14455
-Preferred Channel: mobile
-Language Preference: es.

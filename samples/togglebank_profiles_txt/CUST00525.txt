@@ -1,9 +1,0 @@
-Name: Jamie Q.
-City: Atlanta, GA
-Account Tier: Silver
-Account Since: 2022-12-28
-Last Login: 2025-05-01
-Average Balance: <1k
-Rewards Points: 16213
-Preferred Channel: branch
-Language Preference: fr.

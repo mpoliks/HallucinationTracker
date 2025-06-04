@@ -1,9 +1,0 @@
-Name: Avery A.
-City: Phoenix, AZ
-Account Tier: Gold
-Account Since: 2016-08-02
-Last Login: 2025-05-04
-Average Balance: <1k
-Rewards Points: 329
-Preferred Channel: phone
-Language Preference: en.

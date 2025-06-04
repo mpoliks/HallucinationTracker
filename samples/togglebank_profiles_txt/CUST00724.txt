@@ -1,9 +1,0 @@
-Name: Dana U.
-City: Denver, CO
-Account Tier: Silver
-Account Since: 2022-09-19
-Last Login: 2025-05-03
-Average Balance: 10k-50k
-Rewards Points: 7501
-Preferred Channel: branch
-Language Preference: es.

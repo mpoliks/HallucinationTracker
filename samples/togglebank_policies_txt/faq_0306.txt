@@ -1,8 +1,0 @@
-What is the procedure to do I enable biometric login?
-
-What is the procedure to do I enable biometric login?
-1. Next time you open the app, you can log in with biometrics instead of a password.
-2. Toggle “Enable Face ID / Fingerprint”.
-3. In the mobile app go to Settings ▸ Login & Security.
-4. Authenticate with your device’s biometrics to confirm.
-5. If you need further assistance, contact ToggleSupport via chat 24/7.

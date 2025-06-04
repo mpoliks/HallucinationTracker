@@ -1,9 +1,0 @@
-Name: Tatum O.
-City: Miami, FL
-Account Tier: Bronze
-Account Since: 2023-06-20
-Last Login: 2025-05-17
-Average Balance: <1k
-Rewards Points: 22621
-Preferred Channel: phone
-Language Preference: en.

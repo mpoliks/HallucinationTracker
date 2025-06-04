@@ -1,9 +1,0 @@
-Name: Sydney U.
-City: Minneapolis, MN
-Account Tier: Gold
-Account Since: 2022-08-21
-Last Login: 2025-05-21
-Average Balance: <1k
-Rewards Points: 20327
-Preferred Channel: phone
-Language Preference: es.

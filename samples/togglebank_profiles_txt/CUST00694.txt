@@ -1,9 +1,0 @@
-Name: Avery D.
-City: Phoenix, AZ
-Account Tier: Silver
-Account Since: 2024-03-26
-Last Login: 2025-05-05
-Average Balance: <1k
-Rewards Points: 8975
-Preferred Channel: branch
-Language Preference: fr.

@@ -1,9 +1,0 @@
-Name: Sydney N.
-City: Atlanta, GA
-Account Tier: Bronze
-Account Since: 2022-02-17
-Last Login: 2025-05-17
-Average Balance: 1k-10k
-Rewards Points: 9330
-Preferred Channel: branch
-Language Preference: es.

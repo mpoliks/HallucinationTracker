@@ -1,7 +1,0 @@
-How do I enable two‑factor authentication (2FA)?
-
-How do I enable two‑factor authentication (2FA)?
-1. Choose SMS, Email, or Authenticator App.
-2. Log in and go to Settings ▸ Security.
-3. Toggle “Two‑Factor Authentication”.
-4. 2FA is required for high‑risk actions like adding new payees or changing contact info.

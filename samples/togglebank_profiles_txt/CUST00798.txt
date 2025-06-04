@@ -1,9 +1,0 @@
-Name: Avery O.
-City: Chicago, IL
-Account Tier: Silver
-Account Since: 2021-08-04
-Last Login: 2025-05-30
-Average Balance: 10k-50k
-Rewards Points: 39459
-Preferred Channel: phone
-Language Preference: es.

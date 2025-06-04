@@ -1,9 +1,0 @@
-Name: Rowan U.
-City: Boston, MA
-Account Tier: Gold
-Account Since: 2015-09-16
-Last Login: 2025-05-23
-Average Balance: 50k-100k
-Rewards Points: 2423
-Preferred Channel: branch
-Language Preference: es.

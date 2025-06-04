@@ -1,9 +1,0 @@
-Name: Rowan I.
-City: San Diego, CA
-Account Tier: Silver
-Account Since: 2023-11-13
-Last Login: 2025-05-19
-Average Balance: <1k
-Rewards Points: 13579
-Preferred Channel: web
-Language Preference: es.

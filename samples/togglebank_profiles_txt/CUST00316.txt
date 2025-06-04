@@ -1,9 +1,0 @@
-Name: Tatum O.
-City: Boston, MA
-Account Tier: Platinum
-Account Since: 2020-04-27
-Last Login: 2025-05-19
-Average Balance: 100k+
-Rewards Points: 22921
-Preferred Channel: branch
-Language Preference: es.

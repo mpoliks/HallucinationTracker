@@ -1,9 +1,0 @@
-Name: Taylor P.
-City: Atlanta, GA
-Account Tier: Gold
-Account Since: 2020-10-03
-Last Login: 2025-05-19
-Average Balance: <1k
-Rewards Points: 29622
-Preferred Channel: web
-Language Preference: en.

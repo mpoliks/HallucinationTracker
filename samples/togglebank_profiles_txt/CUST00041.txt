@@ -1,9 +1,0 @@
-Name: Alex F.
-City: Denver, CO
-Account Tier: Gold
-Account Since: 2018-06-19
-Last Login: 2025-05-30
-Average Balance: 10k-50k
-Rewards Points: 23004
-Preferred Channel: mobile
-Language Preference: es.

@@ -40,7 +40,7 @@ Bedrock LLM + Guardrails → Response + Metrics → LaunchDarkly → Evaluation 
 ```
 ToggleBankRAG/
 ├── script.py                                    ← Main RAG chat application
-├── samples/
+├── samples/                                     ← Evaluation datasets & source data
 │   ├── togglebank_eval_dataset_bedrock.jsonl   ← Policy evaluation (20 Q&As)
 │   ├── togglebank_customer_eval_dataset.jsonl  ← Customer evaluation (60 Q&As)
 │   ├── cleaned_policies/                       ← 40 canonical policies
@@ -49,15 +49,18 @@ ToggleBankRAG/
 │   └── cleaned_profiles/                       ← 68 canonical customer profiles
 │       ├── customer_001.txt ... customer_068.txt
 │       └── profile_metadata.json
-├── Data Analysis & Generation Tools/
-│   ├── analyze_policies.py                     ← Policy quality analysis
-│   ├── cleanup_policies.py                     ← Policy data cleanup
-│   ├── analyze_profiles.py                     ← Customer profile analysis
-│   ├── cleanup_profiles.py                     ← Profile data cleanup
-│   ├── update_jsonl_dataset.py                 ← Policy dataset generator
-│   ├── create_customer_eval_jsonl.py          ← Customer dataset generator
-│   └── compare_jsonl_datasets.py              ← Quality comparison tools
-├── Evaluation Scripts/
+├── tools/                                      ← Data processing & generation utilities
+│   ├── analysis/                               ← Data quality analysis
+│   │   ├── analyze_policies.py                 ← Policy quality analysis
+│   │   └── analyze_profiles.py                 ← Customer profile analysis
+│   ├── cleanup/                                ← Data cleanup & enhancement
+│   │   ├── cleanup_policies.py                 ← Policy data cleanup
+│   │   └── cleanup_profiles.py                 ← Profile data cleanup
+│   └── datasets/                               ← Dataset generation
+│       ├── update_jsonl_dataset.py             ← Policy dataset generator
+│       ├── create_customer_eval_jsonl.py       ← Customer dataset generator
+│       └── compare_jsonl_datasets.py           ← Quality comparison tools
+├── evaluation/                                 ← 4D evaluation framework scripts
 │   ├── evaluate_policies_v1.py                ← RAG accuracy & consistency
 │   ├── evaluate_policies_v2.py                ← Customer usability & clarity
 │   ├── evaluate_policies_v3.py                ← Completeness & information quality
@@ -66,10 +69,17 @@ ToggleBankRAG/
 │   ├── evaluate_profiles_v2.py                ← Diversity & representation
 │   ├── evaluate_profiles_v3.py                ← Business utility & analytics
 │   └── evaluate_profiles_v4.py                ← RAG performance optimization
-└── Documentation/
-    ├── JSONL_DATASET_UPDATE.md                ← Policy dataset improvements
-    ├── CUSTOMER_EVAL_DATASET.md               ← Customer dataset details
-    └── RAG_EVALUATION_DATASETS_OVERVIEW.md    ← Complete framework guide
+├── docs/                                       ← Comprehensive documentation
+│   ├── JSONL_DATASET_UPDATE.md                ← Policy dataset improvements
+│   ├── CUSTOMER_EVAL_DATASET.md               ← Customer dataset details
+│   └── RAG_EVALUATION_DATASETS_OVERVIEW.md    ← Complete framework guide
+├── testing/                                   ← Testing utilities
+│   ├── auto_tester.py                         ← Automated testing framework
+│   ├── test_metrics.py                        ← Metrics testing
+│   ├── test_metrics_capture.py                ← Metrics capture testing
+│   └── test_bot_capture.py                    ← Bot interaction testing
+├── requirements.txt                           ← Python dependencies
+└── README.md                                  ← This file
 ```
 
 ## 🛠️ Features
@@ -160,39 +170,39 @@ python script.py
 ### **Run Individual Evaluations**
 ```bash
 # Policy dataset analysis
-python evaluate_policies_v1.py  # RAG accuracy & consistency
-python evaluate_policies_v2.py  # Customer usability & clarity
-python evaluate_policies_v3.py  # Completeness & quality
-python evaluate_policies_v4.py  # RAG optimization
+python evaluation/evaluate_policies_v1.py  # RAG accuracy & consistency
+python evaluation/evaluate_policies_v2.py  # Customer usability & clarity
+python evaluation/evaluate_policies_v3.py  # Completeness & quality
+python evaluation/evaluate_policies_v4.py  # RAG optimization
 
 # Customer dataset analysis  
-python evaluate_profiles_v1.py  # Data accuracy & consistency
-python evaluate_profiles_v2.py  # Diversity & representation
-python evaluate_profiles_v3.py  # Business utility & analytics
-python evaluate_profiles_v4.py  # RAG performance optimization
+python evaluation/evaluate_profiles_v1.py  # Data accuracy & consistency
+python evaluation/evaluate_profiles_v2.py  # Diversity & representation
+python evaluation/evaluate_profiles_v3.py  # Business utility & analytics
+python evaluation/evaluate_profiles_v4.py  # RAG performance optimization
 ```
 
 ### **Generate New Datasets**
 ```bash
 # Regenerate policy evaluation dataset
-python update_jsonl_dataset.py
+python tools/datasets/update_jsonl_dataset.py
 
 # Regenerate customer evaluation dataset  
-python create_customer_eval_jsonl.py
+python tools/datasets/create_customer_eval_jsonl.py
 
 # Compare dataset quality
-python compare_jsonl_datasets.py
+python tools/datasets/compare_jsonl_datasets.py
 ```
 
 ### **Data Analysis**
 ```bash
 # Analyze original data quality
-python analyze_policies.py
-python analyze_profiles.py
+python tools/analysis/analyze_policies.py
+python tools/analysis/analyze_profiles.py
 
 # Clean up data (if needed)
-python cleanup_policies.py
-python cleanup_profiles.py
+python tools/cleanup/cleanup_policies.py
+python tools/cleanup/cleanup_profiles.py
 ```
 
 ## 📊 Evaluation Results Summary
@@ -266,9 +276,9 @@ Each dataset evaluated across:
 
 ## 📚 Documentation
 
-- **[JSONL Dataset Update](JSONL_DATASET_UPDATE.md)** - Policy dataset improvements
-- **[Customer Evaluation Dataset](CUSTOMER_EVAL_DATASET.md)** - Customer dataset details  
-- **[RAG Evaluation Overview](RAG_EVALUATION_DATASETS_OVERVIEW.md)** - Complete framework guide
+- **[JSONL Dataset Update](docs/JSONL_DATASET_UPDATE.md)** - Policy dataset improvements
+- **[Customer Evaluation Dataset](docs/CUSTOMER_EVAL_DATASET.md)** - Customer dataset details  
+- **[RAG Evaluation Overview](docs/RAG_EVALUATION_DATASETS_OVERVIEW.md)** - Complete framework guide
 
 ## 🤝 Contributing
 

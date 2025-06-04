@@ -1,9 +1,0 @@
-Name: Skyler G.
-City: Boston, MA
-Account Tier: Gold
-Account Since: 2020-06-25
-Last Login: 2025-05-01
-Average Balance: <1k
-Rewards Points: 35883
-Preferred Channel: branch
-Language Preference: en.

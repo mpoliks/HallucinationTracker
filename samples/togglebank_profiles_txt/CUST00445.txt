@@ -1,9 +1,0 @@
-Name: Dana I.
-City: Chicago, IL
-Account Tier: Bronze
-Account Since: 2024-05-12
-Last Login: 2025-05-08
-Average Balance: 100k+
-Rewards Points: 23332
-Preferred Channel: web
-Language Preference: en.

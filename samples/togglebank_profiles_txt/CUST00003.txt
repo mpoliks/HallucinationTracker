@@ -1,9 +1,0 @@
-Name: Alex X.
-City: Boston, MA
-Account Tier: Silver
-Account Since: 2022-05-05
-Last Login: 2025-05-05
-Average Balance: <1k
-Rewards Points: 30768
-Preferred Channel: branch
-Language Preference: fr.

@@ -1,9 +1,0 @@
-Name: Avery I.
-City: Austin, TX
-Account Tier: Bronze
-Account Since: 2022-04-11
-Last Login: 2025-05-06
-Average Balance: <1k
-Rewards Points: 25974
-Preferred Channel: branch
-Language Preference: es.

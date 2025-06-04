@@ -1,9 +1,0 @@
-Name: Sawyer V.
-City: Atlanta, GA
-Account Tier: Bronze
-Account Since: 2022-10-20
-Last Login: 2025-05-11
-Average Balance: <1k
-Rewards Points: 27676
-Preferred Channel: web
-Language Preference: de.

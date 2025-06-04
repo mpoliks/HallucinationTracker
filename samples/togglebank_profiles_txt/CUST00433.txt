@@ -1,9 +1,0 @@
-Name: Taylor I.
-City: Chicago, IL
-Account Tier: Bronze
-Account Since: 2021-10-30
-Last Login: 2025-05-02
-Average Balance: 50k-100k
-Rewards Points: 26256
-Preferred Channel: branch
-Language Preference: en.

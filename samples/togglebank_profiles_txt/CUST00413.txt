@@ -1,9 +1,0 @@
-Name: Reese F.
-City: Chicago, IL
-Account Tier: Bronze
-Account Since: 2022-03-20
-Last Login: 2025-05-09
-Average Balance: 1k-10k
-Rewards Points: 9846
-Preferred Channel: web
-Language Preference: es.

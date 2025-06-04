@@ -1,7 +1,0 @@
-What is the procedure to can I add an external account for transfers?
-
-What is the procedure to can I add an external account for transfers?
-1. Enter the routing and account numbers.
-2. ToggleBank sends two micro‑deposits within 1‑2 business days.
-3. Go to Transfers ▸ Add External Account.
-4. Verify the amounts in the app to activate the link.

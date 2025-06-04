@@ -1,9 +1,0 @@
-Name: Skyler I.
-City: Atlanta, GA
-Account Tier: Bronze
-Account Since: 2024-02-13
-Last Login: 2025-05-06
-Average Balance: <1k
-Rewards Points: 19042
-Preferred Channel: branch
-Language Preference: fr.

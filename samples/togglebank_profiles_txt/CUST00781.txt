@@ -1,9 +1,0 @@
-Name: Reese V.
-City: Chicago, IL
-Account Tier: Silver
-Account Since: 2023-01-02
-Last Login: 2025-05-05
-Average Balance: 50k-100k
-Rewards Points: 34555
-Preferred Channel: mobile
-Language Preference: fr.

@@ -1,9 +1,0 @@
-Name: Tatum V.
-City: San Diego, CA
-Account Tier: Bronze
-Account Since: 2016-02-01
-Last Login: 2025-05-13
-Average Balance: 10k-50k
-Rewards Points: 22222
-Preferred Channel: branch
-Language Preference: es.

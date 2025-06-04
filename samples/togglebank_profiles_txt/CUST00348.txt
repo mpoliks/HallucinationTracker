@@ -1,9 +1,0 @@
-Name: Quinn X.
-City: Austin, TX
-Account Tier: Bronze
-Account Since: 2023-07-03
-Last Login: 2025-05-29
-Average Balance: <1k
-Rewards Points: 633
-Preferred Channel: web
-Language Preference: es.

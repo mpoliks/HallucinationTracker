@@ -1,9 +1,0 @@
-Name: Sydney V.
-City: Atlanta, GA
-Account Tier: Bronze
-Account Since: 2019-04-05
-Last Login: 2025-05-25
-Average Balance: 10k-50k
-Rewards Points: 40065
-Preferred Channel: mobile
-Language Preference: es.

@@ -1,9 +1,0 @@
-Name: Sawyer S.
-City: Seattle, WA
-Account Tier: Silver
-Account Since: 2017-11-02
-Last Login: 2025-05-02
-Average Balance: <1k
-Rewards Points: 19768
-Preferred Channel: mobile
-Language Preference: en.

@@ -1,9 +1,0 @@
-Name: Sydney L.
-City: San Diego, CA
-Account Tier: Bronze
-Account Since: 2022-11-04
-Last Login: 2025-05-10
-Average Balance: <1k
-Rewards Points: 43137
-Preferred Channel: phone
-Language Preference: fr.

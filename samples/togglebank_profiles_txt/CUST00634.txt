@@ -1,9 +1,0 @@
-Name: Tatum B.
-City: Chicago, IL
-Account Tier: Gold
-Account Since: 2016-06-18
-Last Login: 2025-05-01
-Average Balance: 1k-10k
-Rewards Points: 41462
-Preferred Channel: mobile
-Language Preference: fr.

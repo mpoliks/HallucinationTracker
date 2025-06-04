@@ -1,8 +1,0 @@
-What is the procedure to do I enable two‑factor authentication (2FA)?
-
-What is the procedure to do I enable two‑factor authentication (2FA)?
-1. 2FA is required for high‑risk actions like adding new payees or changing contact info.
-2. Enter the verification code to confirm activation.
-3. Log in and go to Settings ▸ Security.
-4. Choose SMS, Email, or Authenticator App.
-5. Toggle “Two‑Factor Authentication”.
