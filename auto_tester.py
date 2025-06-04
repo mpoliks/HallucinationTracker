@@ -29,7 +29,7 @@ logging.basicConfig(
 )
 
 class AutoTester:
-    def __init__(self, dataset_path: str = "/Users/marek/Downloads/togglebank_eval_dataset.jsonl"):
+    def __init__(self, dataset_path: str = "samples/togglebank_eval_dataset_bedrock.jsonl"):
         self.dataset_path = dataset_path
         self.questions = self.load_questions()
         self.positive_feedback_rate = 0.90  # 90% positive feedback
@@ -48,14 +48,23 @@ class AutoTester:
                 for line in f:
                     line = line.strip()
                     if line:
-                        # Handle the malformed first line
-                        if line.startswith(' fr{"prompt"'):
-                            line = line[3:]  # Remove ' fr' prefix
-                        
                         try:
                             data = json.loads(line)
+                            
+                            # Handle both formats: simple and bedrock
                             if 'prompt' in data:
+                                # Simple format: {"prompt": "question", ...}
                                 questions.append(data['prompt'])
+                            elif 'conversationTurns' in data:
+                                # Bedrock format: {"conversationTurns": [{"prompt": {"content": [{"text": "question"}]}}]}
+                                turns = data.get('conversationTurns', [])
+                                for turn in turns:
+                                    prompt_data = turn.get('prompt', {})
+                                    content_list = prompt_data.get('content', [])
+                                    for content in content_list:
+                                        if 'text' in content:
+                                            questions.append(content['text'])
+                                            
                         except json.JSONDecodeError as e:
                             logging.warning(f"Skipping malformed line: {line[:50]}...")
                             continue
@@ -233,7 +242,7 @@ def main():
         sys.exit(1)
     
     # Check if dataset exists
-    dataset_path = "/Users/marek/Downloads/togglebank_eval_dataset.jsonl"
+    dataset_path = "samples/togglebank_eval_dataset_bedrock.jsonl"
     if not Path(dataset_path).exists():
         print(f"⚠️  Warning: Dataset not found at {dataset_path}")
         print("🔄 Will use fallback questions")
