@@ -13,6 +13,13 @@ import time
 import uuid
 from pathlib import Path
 
+# Platform-specific imports
+try:
+    import select
+    HAS_SELECT = True
+except ImportError:
+    HAS_SELECT = False  # Windows doesn't have select for pipes
+
 class HallucinationTrackerAutoTester:
     def __init__(self):
         self.dataset_path = "samples/togglebank_eval_dataset_bedrock.jsonl"
@@ -89,7 +96,7 @@ class HallucinationTrackerAutoTester:
     
     def run_chat_session(self) -> bool:
         """
-        Run a single chat session with the bot using direct process interaction
+        Run a single chat session with the bot
         Returns True if successful, False if AWS token expired
         """
         try:
@@ -98,109 +105,58 @@ class HallucinationTrackerAutoTester:
                 [sys.executable, "script.py"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Combine stderr with stdout
-                text=True,
-                bufsize=0  # Unbuffered
+                stderr=subprocess.PIPE,
+                text=True
             )
             
             # Get a random question
             question = self.get_random_question()
             logging.info(f"Session {self.session_count + 1}: Asking: {question}")
             
-            # Send the question
-            process.stdin.write(question + '\n')
-            process.stdin.flush()
+            # Calculate and provide feedback
+            should_give_positive = self.should_give_positive_feedback()
+            feedback = "y" if should_give_positive else "n"
             
-            # Read output until we get to feedback prompt
-            start_time = time.time()
-            timeout = 60  # 60 second timeout
+            # Prepare the complete input sequence
+            input_sequence = f"{question}\n{feedback}\nexit\n"
             
-            # Buffer to collect all output
-            full_output = ""
+            # Execute the complete interaction
+            try:
+                stdout, stderr = process.communicate(input=input_sequence, timeout=60)
+            except subprocess.TimeoutExpired:
+                logging.warning("Session timed out, terminating...")
+                process.kill()
+                stdout, stderr = process.communicate()
+                return True  # Continue trying
             
-            while time.time() - start_time < timeout:
-                if process.poll() is not None:
-                    # Process ended, read any remaining output
-                    remaining_output = process.stdout.read()
-                    if remaining_output:
-                        full_output += remaining_output
-                    break
-                
-                try:
-                    # Read available characters
-                    char = process.stdout.read(1)
-                    if not char:
-                        time.sleep(0.1)
-                        continue
-                    
-                    full_output += char
-                    
-                    # Check if we've reached the feedback prompt
-                    if "Was this helpful? (y/n)" in full_output:
-                        # We found the feedback prompt, break to provide feedback
-                        break
-                
-                except Exception as e:
-                    logging.warning(f"Error reading output: {e}")
-                    break
-            
-            # Extract assistant response from the full output
-            assistant_response_text = self.extract_assistant_response(full_output)
-            if assistant_response_text:
-                # Truncate long responses for cleaner logging
-                if len(assistant_response_text) > 300:
-                    assistant_response_text = assistant_response_text[:300] + "..."
-                logging.info(f"🤖 Bot Response: {assistant_response_text}")
+            # Extract and log the assistant response
+            bot_response = self.extract_assistant_response(stdout)
+            if bot_response:
+                # Truncate for clean logging
+                truncated_response = (bot_response[:200] + "...") if len(bot_response) > 200 else bot_response
+                logging.info(f"🤖 Bot Response: {truncated_response}")
             else:
                 logging.info("🤖 Bot Response: [Could not capture response]")
             
-            # Provide feedback
-            feedback = "y" if self.should_give_positive_feedback() else "n"
-            feedback_text = "positive" if feedback == "y" else "negative"
-            
-            # Calculate current stats for logging
-            temp_positive = self.positive_feedback_given + (1 if feedback == "y" else 0)
-            temp_total = self.total_questions + 1
-            current_rate = (temp_positive / temp_total) * 100
-            
-            logging.info(f"Providing {feedback_text} feedback (running rate: {current_rate:.1f}%)")
-            
-            # Send feedback
-            process.stdin.write(feedback + '\n')
-            process.stdin.flush()
-            
-            # Wait a moment then exit
-            time.sleep(2)
-            process.stdin.write('exit\n')
-            process.stdin.flush()
-            
-            # Wait for process to finish
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
+            # Extract and log SDK and guardrails metrics
+            self.extract_and_log_metrics(stderr)
             
             # Update stats
+            self.session_count += 1
             self.total_questions += 1
-            if feedback == "y":
+            if should_give_positive:
                 self.positive_feedback_given += 1
+                
+            current_rate = (self.positive_feedback_given / self.total_questions) * 100
+            logging.info(f"Providing {'positive' if should_give_positive else 'negative'} feedback (running rate: {current_rate:.1f}%)")
             
-            logging.info(f"Session {self.session_count + 1} completed successfully")
-            logging.info(f"✅ New user context created for next session")
+            logging.info(f"Session {self.total_questions} completed successfully")
+            logging.info("✅ New user context created for next session")
+            
             return True
             
         except Exception as e:
             logging.error(f"Error in chat session: {e}")
-            try:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=2)
-            except:
-                pass
             return True  # Continue trying unless it's a token issue
     
     def extract_assistant_response(self, output: str) -> str:
@@ -240,6 +196,38 @@ class HallucinationTrackerAutoTester:
         except Exception as e:
             logging.warning(f"Error extracting response: {e}")
             return ""
+    
+    def extract_and_log_metrics(self, stderr_output: str) -> None:
+        """Extract and log SDK and guardrails metrics from stderr output"""
+        if not stderr_output:
+            return
+            
+        lines = stderr_output.split('\n')
+        
+        for line in lines:
+            # Extract LaunchDarkly AI tracked metrics
+            if "LaunchDarkly AI tracked metrics:" in line:
+                logging.info(f"📊 SDK Metrics: {line.split('LaunchDarkly AI tracked metrics: ')[1]}")
+            
+            # Extract accuracy metric (grounding score)
+            elif "Sent accuracy metric to LaunchDarkly:" in line:
+                accuracy = line.split('Sent accuracy metric to LaunchDarkly: ')[1]
+                logging.info(f"🎯 Accuracy (Grounding): {accuracy}")
+            
+            # Extract relevance metric
+            elif "Sent relevance metric to LaunchDarkly:" in line:
+                relevance = line.split('Sent relevance metric to LaunchDarkly: ')[1]
+                logging.info(f"🔍 Relevance: {relevance}")
+            
+            # Extract other potentially useful metrics
+            elif "Knowledge Base ID:" in line:
+                kb_info = line.split('| INFO    | ')[1] if '| INFO    |' in line else line
+                logging.info(f"📚 RAG: {kb_info.strip()}")
+                
+            # Log any error messages
+            elif "| ERROR   |" in line:
+                error_msg = line.split('| ERROR   | ')[1] if '| ERROR   |' in line else line
+                logging.warning(f"❌ Error: {error_msg.strip()}")
     
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C gracefully"""
