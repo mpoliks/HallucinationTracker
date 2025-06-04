@@ -6,6 +6,9 @@
 venv/
 env/
 
+# Auto tester logs
+auto_tester.log
+
 # Python cache
 __pycache__/
 *.py[cod]
