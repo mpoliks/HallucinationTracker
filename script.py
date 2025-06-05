@@ -62,26 +62,48 @@ def print_box(title: str, text: str) -> None:
 def s3_get_passages(question: str, kb_id: str) -> str:
     """
     Query AWS Bedrock Knowledge Base using vector search
+    Enhanced to retrieve broader policy information for tier-related questions
     """
     try:
+        # First, perform the standard retrieval
         response = bedrock_agent.retrieve(
-            knowledgeBaseId=kb_id,  # Now passed as parameter
+            knowledgeBaseId=kb_id,
             retrievalQuery={
                 'text': question
             },
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
-                    'numberOfResults': 20  # Increased from 10 to 20 for more comprehensive context
+                    'numberOfResults': 15  # Slightly reduced to make room for additional policy search
                 }
             }
         )
         
-        # Extract and concatenate retrieved passages
         passages = []
         for result in response.get('retrievalResults', []):
             content = result.get('content', {}).get('text', '')
             if content:
                 passages.append(content)
+        
+        # If the question is about tiers, also search for general tier information
+        tier_keywords = ['tier', 'tiers', 'account tier', 'benefits', 'qualification', 'qualify', 'interest rate']
+        if any(keyword in question.lower() for keyword in tier_keywords):
+            # Additional search for comprehensive tier information
+            tier_response = bedrock_agent.retrieve(
+                knowledgeBaseId=kb_id,
+                retrievalQuery={
+                    'text': "account tiers qualifications requirements benefits interest rates"
+                },
+                retrievalConfiguration={
+                    'vectorSearchConfiguration': {
+                        'numberOfResults': 5  # Additional policy information
+                    }
+                }
+            )
+            
+            for result in tier_response.get('retrievalResults', []):
+                content = result.get('content', {}).get('text', '')
+                if content and content not in passages:  # Avoid duplicates
+                    passages.append(content)
         
         if passages:
             return '\n\n---\n\n'.join(passages)
@@ -102,11 +124,21 @@ def extract_system_messages(msgs) -> List[Dict[str, str]]:
     return [{"text": m.content} for m in msgs if m.role == "system"]
 
 def build_guardrail_prompt(passages: str, question: str) -> str:
-    # Try a format that may trigger contextual grounding better
+    # Enhanced prompt that encourages comprehensive responses and broader information retrieval
     return (
-        f"Given the following source information:\n\n{passages}\n\n"
-        f"Question: {question}\n\n"
-        f"Please answer based only on the provided source information."
+        f"You are a helpful ToggleBank customer service representative. Using the provided source information, "
+        f"answer the customer's question with complete and detailed information.\n\n"
+        f"Source Information:\n{passages}\n\n"
+        f"Customer Question: {question}\n\n"
+        f"Instructions:\n"
+        f"- Provide comprehensive and detailed responses that fully address the customer's question\n"
+        f"- When asked about account tiers, ALWAYS include complete information about ALL tier levels, their requirements, and benefits (not just the customer's current tier)\n"
+        f"- Include specific details like interest rates, minimum balances, qualifications, and any special benefits\n"
+        f"- If the customer has a specific tier, explain their current benefits AND what other tiers offer\n"
+        f"- Always end with contact information: 'If you need further assistance, contact ToggleSupport via chat 24/7.'\n"
+        f"- Use only the information provided in the source material, but be thorough in utilizing ALL relevant information available\n"
+        f"- Present information in a clear, organized format (numbered lists work well)\n\n"
+        f"Response:"
     )
 
 # Simple Message class to match expected structure
@@ -114,9 +146,73 @@ class SimpleMessage:
     def __init__(self, role: str, content: str):
         self.role = role
         self.content = content
+    
+    def to_dict(self):
+        return {
+            "role": self.role,
+            "content": self.content
+        }
 
 # graceful Ctrl-C
 signal.signal(signal.SIGINT, lambda *_: sys.exit("\n👋  bye!"))
+
+def check_factual_accuracy(source_passages: str, response_text: str, model_id: str) -> float:
+    """
+    Check factual accuracy by extracting and comparing key facts
+    Returns a score from 0.0 to 1.0 representing factual accuracy
+    """
+    fact_check_prompt = f"""
+You are a fact-checking expert. Compare the response against the source material and identify any factual errors.
+
+SOURCE MATERIAL:
+{source_passages}
+
+RESPONSE TO CHECK:
+{response_text}
+
+Instructions:
+1. Extract key factual claims from the response (names, numbers, dates, policies, requirements)
+2. Check each factual claim against the source material
+3. Ignore tone, style, helpfulness - focus ONLY on factual accuracy
+4. Return a JSON with:
+   - "factual_claims": list of key facts claimed in response
+   - "accurate_claims": list of claims that are accurate per source
+   - "inaccurate_claims": list of claims that are wrong or unsupported
+   - "accuracy_score": decimal from 0.0 to 1.0
+
+Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurate_claims": [...], "accuracy_score": 0.95}}
+"""
+
+    try:
+        fact_check_response = bedrock.converse(
+            modelId=model_id,
+            messages=[
+                {
+                    "role": "user", 
+                    "content": [{"text": fact_check_prompt}]
+                }
+            ]
+        )
+        
+        fact_result = fact_check_response["output"]["message"]["content"][0]["text"]
+        
+        # Parse JSON response
+        import json
+        try:
+            fact_data = json.loads(fact_result)
+            return fact_data.get("accuracy_score", 0.0)
+        except json.JSONDecodeError:
+            # Fallback: try to extract score from text
+            if "accuracy_score" in fact_result:
+                import re
+                score_match = re.search(r'"accuracy_score":\s*([0-9.]+)', fact_result)
+                if score_match:
+                    return float(score_match.group(1))
+            return 0.0
+            
+    except Exception as e:
+        logging.error(f"Factual accuracy check failed: {e}")
+        return 0.0
 
 # ── main loop ────────────────────────────────────────────────────────────────
 def main() -> None:
@@ -124,14 +220,25 @@ def main() -> None:
     unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
     context = Context.builder(unique_user_key).kind("user").name(f"CLI Tester {unique_user_key}").build()
     
-    # Enhanced default config with model details for better tracking
+    # Enhanced default config with a more capable model for comprehensive responses
     default_cfg = AIConfig(
         enabled=True, 
-        model=ModelConfig(name="us.anthropic.claude-3-haiku-20240307-v1:0"), 
-        messages=[]
+        model=ModelConfig(name="us.anthropic.claude-3-5-sonnet-20241022-v2:0"), 
+        messages=[
+            SimpleMessage(role="system", content="You are a knowledgeable ToggleBank customer service representative. Always provide comprehensive, detailed responses that fully address customer questions. When discussing account tiers, include complete information about all tier levels, requirements, and benefits. Be thorough and helpful while staying accurate to the source information.")
+        ]
     )
 
     cfg, tracker = ai_client.config(LD_KEY, context, default_cfg, {})
+    
+    # Debug what LaunchDarkly actually returned vs our defaults
+    logging.info(f"=== AI CONFIG DEBUG ===")
+    logging.info(f"Our default model: {default_cfg.model.name}")
+    logging.info(f"Our default messages count: {len(default_cfg.messages)}")
+    logging.info(f"LaunchDarkly returned model: {cfg.model.name if cfg.model else 'None'}")
+    logging.info(f"LaunchDarkly returned messages count: {len(cfg.messages) if cfg.messages else 0}")
+    logging.info(f"Final model being used: {cfg.model.name if cfg.model else 'fallback'}")
+    logging.info(f"=== END DEBUG ===")
     
     # Get configuration values from LaunchDarkly AI config custom parameters
     # Custom parameters are stored under model.custom in the config dict
@@ -157,7 +264,7 @@ def main() -> None:
     logging.info(f"AI Config received: enabled={cfg.enabled}, model={cfg.model}")
     logging.info(f"Custom params: kb_id={KB_ID}, gr_id={GR_ID}, gr_version={GR_VER}")
     
-    model_id = cfg.model.name if cfg.model else "us.anthropic.claude-3-haiku-20240307-v1:0"
+    model_id = cfg.model.name if cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
     history  = list(cfg.messages) if cfg.messages else []   # seed messages from LD
 
     logging.info(f"Generated unique user: {unique_user_key}")
@@ -196,6 +303,13 @@ def main() -> None:
         
         convo_msgs = map_messages(history) + [{"role": "user", "content": user_content}]
         system_msgs = extract_system_messages(history)
+
+        # Debug: Show what system messages are being sent to Bedrock
+        logging.info(f"=== SYSTEM MESSAGES DEBUG ===")
+        logging.info(f"Number of system messages: {len(system_msgs)}")
+        for i, msg in enumerate(system_msgs):
+            logging.info(f"System message {i+1}: {msg['text'][:200]}..." if len(msg['text']) > 200 else f"System message {i+1}: {msg['text']}")
+        logging.info(f"=== END SYSTEM DEBUG ===")
 
         t0 = time.time()
         try:
@@ -263,6 +377,21 @@ def main() -> None:
             # trace object now lives at response["trace"]["guardrail"]
             g_trace = raw.get("trace", {}).get("guardrail", {})
             
+            # Debug guardrail assessment details
+            logging.info(f"=== GUARDRAIL DEBUG ===")
+            logging.info(f"Full guardrail trace keys: {list(g_trace.keys()) if g_trace else 'None'}")
+            output_assessments = g_trace.get("outputAssessments", {})
+            if output_assessments:
+                logging.info(f"Output assessments found for: {list(output_assessments.keys())}")
+                for guardrail_id, assessments in output_assessments.items():
+                    if isinstance(assessments, list) and len(assessments) > 0:
+                        assessment = assessments[0]
+                        logging.info(f"Assessment keys: {list(assessment.keys())}")
+                        if "contextualGroundingPolicy" in assessment:
+                            cg_policy = assessment["contextualGroundingPolicy"]
+                            logging.info(f"Contextual grounding policy: {cg_policy}")
+            logging.info(f"=== END GUARDRAIL DEBUG ===")
+            
             # Extract grounding and relevance scores from output assessments
             grounding = None
             relevance = None
@@ -314,6 +443,10 @@ def main() -> None:
         
         print_box("ASSISTANT", reply_txt)
 
+        # ── factual accuracy check ────────────────────────────────────────────
+        factual_accuracy = check_factual_accuracy(passages, reply_txt, model_id)
+        logging.info(f"Accuracy score: {factual_accuracy:.3f}")
+
         # ── feedback ──────────────────────────────────────────────────────────
         print_box("FEEDBACK", "👍  Was this helpful? (y/n)")
         fb = input("Your answer: ").strip().lower()
@@ -324,15 +457,15 @@ def main() -> None:
 
         # ── accuracy metric for LaunchDarkly experiment ──────────────────────
         if grounding is not None:
-            # Convert grounding score to percentage and send to LaunchDarkly
-            accuracy_percentage = grounding * 100
+            # Convert grounding score to percentage and send to LaunchDarkly as Source Fidelity
+            grounding_percentage = grounding * 100
             ld.track(
-                "$ld:ai:hallucinations",
+                "$ld:ai:source-fidelity",
                 context, 
                 data=None,
-                metric_value=accuracy_percentage
+                metric_value=grounding_percentage
             )
-            logging.info(f"Sent accuracy metric to LaunchDarkly: {accuracy_percentage:.1f}%")
+            logging.info(f"Sent source fidelity metric to LaunchDarkly: {grounding_percentage:.1f}%")
             
         # ── relevance metric for LaunchDarkly experiment ───────────────────────
         if relevance is not None:
@@ -346,14 +479,26 @@ def main() -> None:
             )
             logging.info(f"Sent relevance metric to LaunchDarkly: {relevance_percentage:.1f}%")
 
+        # ── accuracy metric for LaunchDarkly (factual accuracy = anti-hallucination) ───────────────────
+        factual_accuracy_percentage = factual_accuracy * 100
+        ld.track(
+            "$ld:ai:hallucinations",
+            context,
+            data=None,
+            metric_value=factual_accuracy_percentage
+        )
+        logging.info(f"Sent accuracy metric to LaunchDarkly: {factual_accuracy_percentage:.1f}%")
+
         # ── session summary ──────────────────────────────────────────────────
         met = reply_obj.get("metrics", {})
-        accuracy_str = f"{grounding:.2f}" if grounding is not None else "None"
+        grounding_str = f"{grounding:.2f}" if grounding is not None else "None"
         relevance_str = f"{relevance:.2f}" if relevance is not None else "None"
+        accuracy_str = f"{factual_accuracy:.2f}"
         summary = (
             f"Latency: {latency} ms | Bedrock tokens in/out: "
             f"{input_tokens}/{output_tokens} | "
-            f"Accuracy: {accuracy_str} | Relevance: {relevance_str}"
+            f"Source Fidelity: {grounding_str} | Relevance: {relevance_str} | "
+            f"Accuracy: {accuracy_str}"
         )
         print_box("METRICS", summary)
 
