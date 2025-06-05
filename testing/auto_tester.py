@@ -22,7 +22,7 @@ class HallucinationTrackerAutoTester:
         self.total_questions = 0
         self.positive_feedback_given = 0
         self.target_positive_rate = 0.95  # 95%
-        self.session_interval = 10  # seconds
+        self.session_interval = 5  # seconds (reduced for faster testing)
         
         # Setup logging
         logging.basicConfig(
@@ -76,7 +76,9 @@ class HallucinationTrackerAutoTester:
     
     def get_random_question(self) -> str:
         """Get a random question from the dataset"""
-        return random.choice(self.questions)
+        # Override for specific Rebecca Sato testing
+        return "what does Rebecca Sato's account tier mean for her in terms of benefits?"
+        # Original: return random.choice(self.questions)
     
     def should_give_positive_feedback(self) -> bool:
         """Determine if positive feedback should be given to maintain ~95% rate"""

@@ -45,7 +45,6 @@ ai_client = LDAIClient(ld)
 # AWS clients
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 bedrock_agent = boto3.client("bedrock-agent-runtime", region_name=REGION)
-s3      = boto3.client("s3",              region_name=REGION)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
 
@@ -59,13 +58,11 @@ def print_box(title: str, text: str) -> None:
         print("│ " + l.ljust(width-2) + " │")
     print("└" + "─"*width + "┘")
 
-def s3_get_passages(question: str, kb_id: str) -> str:
+def get_kb_passages(question: str, kb_id: str) -> str:
     """
     Query AWS Bedrock Knowledge Base using vector search
-    Enhanced to retrieve broader policy information for tier-related questions
     """
     try:
-        # First, perform the standard retrieval
         response = bedrock_agent.retrieve(
             knowledgeBaseId=kb_id,
             retrievalQuery={
@@ -73,7 +70,7 @@ def s3_get_passages(question: str, kb_id: str) -> str:
             },
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
-                    'numberOfResults': 15  # Slightly reduced to make room for additional policy search
+                    'numberOfResults': 25  # Expanded window for better accuracy
                 }
             }
         )
@@ -83,27 +80,6 @@ def s3_get_passages(question: str, kb_id: str) -> str:
             content = result.get('content', {}).get('text', '')
             if content:
                 passages.append(content)
-        
-        # If the question is about tiers, also search for general tier information
-        tier_keywords = ['tier', 'tiers', 'account tier', 'benefits', 'qualification', 'qualify', 'interest rate']
-        if any(keyword in question.lower() for keyword in tier_keywords):
-            # Additional search for comprehensive tier information
-            tier_response = bedrock_agent.retrieve(
-                knowledgeBaseId=kb_id,
-                retrievalQuery={
-                    'text': "account tiers qualifications requirements benefits interest rates"
-                },
-                retrievalConfiguration={
-                    'vectorSearchConfiguration': {
-                        'numberOfResults': 5  # Additional policy information
-                    }
-                }
-            )
-            
-            for result in tier_response.get('retrievalResults', []):
-                content = result.get('content', {}).get('text', '')
-                if content and content not in passages:  # Avoid duplicates
-                    passages.append(content)
         
         if passages:
             return '\n\n---\n\n'.join(passages)
@@ -124,22 +100,7 @@ def extract_system_messages(msgs) -> List[Dict[str, str]]:
     return [{"text": m.content} for m in msgs if m.role == "system"]
 
 def build_guardrail_prompt(passages: str, question: str) -> str:
-    # Enhanced prompt that encourages comprehensive responses and broader information retrieval
-    return (
-        f"You are a helpful ToggleBank customer service representative. Using the provided source information, "
-        f"answer the customer's question with complete and detailed information.\n\n"
-        f"Source Information:\n{passages}\n\n"
-        f"Customer Question: {question}\n\n"
-        f"Instructions:\n"
-        f"- Provide comprehensive and detailed responses that fully address the customer's question\n"
-        f"- When asked about account tiers, ALWAYS include complete information about ALL tier levels, their requirements, and benefits (not just the customer's current tier)\n"
-        f"- Include specific details like interest rates, minimum balances, qualifications, and any special benefits\n"
-        f"- If the customer has a specific tier, explain their current benefits AND what other tiers offer\n"
-        f"- Always end with contact information: 'If you need further assistance, contact ToggleSupport via chat 24/7.'\n"
-        f"- Use only the information provided in the source material, but be thorough in utilizing ALL relevant information available\n"
-        f"- Present information in a clear, organized format (numbered lists work well)\n\n"
-        f"Response:"
-    )
+    return f"Source Information:\n{passages}\n\nCustomer Question: {question}"
 
 # Simple Message class to match expected structure
 class SimpleMessage:
@@ -229,13 +190,11 @@ def main() -> None:
     unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
     context = Context.builder(unique_user_key).kind("user").name(f"CLI Tester {unique_user_key}").build()
     
-    # Enhanced default config with a more capable model for comprehensive responses
+    # Default config - will be overridden by LaunchDarkly AI configs
     default_cfg = AIConfig(
         enabled=True, 
         model=ModelConfig(name="us.anthropic.claude-3-5-sonnet-20241022-v2:0"), 
-        messages=[
-            SimpleMessage(role="system", content="You are a knowledgeable ToggleBank customer service representative. Always provide comprehensive, detailed responses that fully address customer questions. When discussing account tiers, include complete information about all tier levels, requirements, and benefits. Be thorough and helpful while staying accurate to the source information.")
-        ]
+        messages=[]
     )
 
     cfg, tracker = ai_client.config(LD_KEY, context, default_cfg, {})
@@ -290,7 +249,7 @@ def main() -> None:
         if user.lower() in {"exit", "quit"}:
             break
 
-        passages = s3_get_passages(user, KB_ID)
+        passages = get_kb_passages(user, KB_ID)
         print_box("RAG DEBUG", f"Knowledge Base ID: {KB_ID}\nQuery: {user}\nPassages Retrieved: {passages[:200]}..." if len(passages) > 200 else f"Knowledge Base ID: {KB_ID}\nPassages Retrieved: {passages}")
         
         prompt   = build_guardrail_prompt(passages, user)
