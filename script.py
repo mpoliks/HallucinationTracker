@@ -250,8 +250,13 @@ def main() -> None:
     # Get evaluation frequency configuration
     eval_freq = float(custom_params.get('eval_freq', '1.0'))  # Default to 100% evaluation
 
+    # Get model name from the initial config for display
+    model_id = initial_cfg.model.name if initial_cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
-    print_box("READY", f"User: Catherine Liu (Silver Tier)\nCity: Boston, MA | Average Balance: <1k\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
+    print_box("READY", f"User: Catherine Liu (Silver Tier)\nCity: Boston, MA | Average Balance: <1k\nModel: {model_id}\nGuardrail: {GR_ID} (v{GR_VER})\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
+
+    # Welcome message
+    print("\n🤖  Hi, this is Bot from ToggleBank, how can I help you?")
 
     while True:
         user = input("\n🧑  You: ").strip()
