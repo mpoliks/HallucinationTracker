@@ -23,6 +23,7 @@ dotenv.load_dotenv()
 
 LD_SDK   = os.getenv("LAUNCHDARKLY_SDK_KEY")
 LD_KEY   = os.getenv("LAUNCHDARKLY_AI_CONFIG_KEY")
+LD_JUDGE_KEY = os.getenv("LAUNCHDARKLY_LLM_JUDGE_KEY")
 REGION   = os.getenv("AWS_REGION", "us-east-1")
 
 # These will now come from LaunchDarkly AI config instead of env vars
@@ -31,7 +32,7 @@ REGION   = os.getenv("AWS_REGION", "us-east-1")
 # KB_ID    = os.getenv("RAG_BUCKET")  
 # PREFIX   = os.getenv("RAG_PREFIX", "rag/passages/")  
 
-if not (LD_SDK and LD_KEY):
+if not (LD_SDK and LD_KEY and LD_JUDGE_KEY):
     sys.exit("✖  Missing required env vars – check your .env file")
 
 # LD initialisation
@@ -117,22 +118,50 @@ class SimpleMessage:
 # graceful Ctrl-C
 signal.signal(signal.SIGINT, lambda *_: sys.exit("\n👋  bye!"))
 
-def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict) -> float:
+def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context) -> float:
     """
     Check factual accuracy by extracting and comparing key facts
     Returns a score from 0.0 to 1.0 representing factual accuracy
     
-    Uses a dedicated fact-checking model from LaunchDarkly AI Config for independent evaluation
+    Uses a dedicated LaunchDarkly AI Config for LLM-as-judge evaluation
     """
     
-    # Get LLM-as-judge model from LaunchDarkly AI Config custom parameters
-    fact_checker_model = custom_params.get('llm_as_judge', 'us.anthropic.claude-3-5-sonnet-20241022-v2:0')
+    # Get eval frequency to control cost
+    eval_freq = float(custom_params.get('eval_freq', '1.0'))
+    random_value = random.random()
+    should_evaluate = random_value < eval_freq
     
-    # Log which models are being used for transparency
-    logging.info(f"Generator model: {generator_model_id}, LLM-as-judge model: {fact_checker_model}")
+    if not should_evaluate:
+        return None
     
-    fact_check_prompt = f"""
-You are a fact-checking expert. Compare the response against the source material and identify any factual errors.
+    # Get LLM-as-judge configuration from separate LaunchDarkly AI config
+    judge_default_cfg = AIConfig(
+        enabled=True, 
+        model=ModelConfig(name="us.anthropic.claude-3-5-sonnet-20241022-v2:0"), 
+        messages=[]
+    )
+    
+    # Pass the actual content as variables to LaunchDarkly for template replacement
+    # Include user context so judge knows WHO the response is about
+    judge_variables = {
+        "source_passages": source_passages,
+        "response_text": response_text,
+        "user_context": "Carmen Kim"  # Add user context for proper fact-checking
+    }
+    
+    judge_cfg, judge_tracker = ai_client.config(LD_JUDGE_KEY, context, judge_default_cfg, judge_variables)
+    
+    # Get judge model from LaunchDarkly config
+    fact_checker_model = judge_cfg.model.name if judge_cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    
+    # Get the final prompt from LaunchDarkly AI config (variables already replaced)
+    if judge_cfg.messages and len(judge_cfg.messages) > 0:
+        # LaunchDarkly has already replaced {{source_passages}} and {{response_text}} with actual content
+        fact_check_prompt = judge_cfg.messages[0].content
+
+    else:
+        # Fallback: manual replacement if LaunchDarkly config not available
+        fact_check_prompt = f"""You are a fact-checking expert. Compare the response against the source material and identify any factual errors.
 
 SOURCE MATERIAL:
 {source_passages}
@@ -150,10 +179,15 @@ Instructions:
    - "inaccurate_claims": list of claims that are wrong or unsupported
    - "accuracy_score": decimal from 0.0 to 1.0
 
-Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurate_claims": [...], "accuracy_score": 0.95}}
-"""
+Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurate_claims": [...], "accuracy_score": 0.95}}"""
+
+    
+    # Execute fact-checking
 
     try:
+        # Track timing and performance metrics for LLM-as-judge
+        judge_start_time = time.time()
+        
         fact_check_response = bedrock.converse(
             modelId=fact_checker_model,  # Use LLM-as-judge from LaunchDarkly config
             messages=[
@@ -164,7 +198,29 @@ Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurat
             ]
         )
         
+        judge_end_time = time.time()
+        judge_duration_ms = int((judge_end_time - judge_start_time) * 1000)
+        
+        # Track success and performance metrics for judge model
+        judge_tracker.track_success()
+        judge_tracker.track_duration(judge_duration_ms)
+        judge_tracker.track_time_to_first_token(judge_duration_ms)  # For non-streaming, TTFT equals total time
+        
+        # Extract and track token usage for judge model
+        judge_usage = fact_check_response.get("usage", {})
+        judge_input_tokens = judge_usage.get("inputTokens", 0)
+        judge_output_tokens = judge_usage.get("outputTokens", 0)
+        judge_total_tokens = judge_input_tokens + judge_output_tokens
+        
+        if judge_total_tokens > 0:
+            judge_token_usage = TokenUsage(total=judge_total_tokens, input=judge_input_tokens, output=judge_output_tokens)
+            judge_tracker.track_tokens(judge_token_usage)
+        
+        # Track judge model performance
+        
         fact_result = fact_check_response["output"]["message"]["content"][0]["text"]
+        
+        # Process judge response
         
         # Parse JSON response
         import json
@@ -181,6 +237,8 @@ Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurat
             return 0.0
             
     except Exception as e:
+        # Track error for judge model
+        judge_tracker.track_error()
         logging.error(f"Factual accuracy check failed: {e}")
         return 0.0
 
@@ -188,7 +246,20 @@ Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurat
 def main() -> None:
     # Generate unique user for fresh experiment exposure each time
     unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
-    context = Context.builder(unique_user_key).kind("user").name(f"CLI Tester {unique_user_key}").build()
+    
+    # Set up Carmen Kim's profile for context variables
+    # Try both flat and nested attributes to match LaunchDarkly template expectations
+    context = Context.builder(unique_user_key).kind("user").name("Carmen Kim").set(
+        "location", "Seattle, WA"
+    ).set(
+        "tier", "Bronze"
+    ).set(
+        "userName", "Carmen Kim"
+    ).set(
+        "user", {"tier": "Bronze", "name": "Carmen Kim"}  # Try nested structure too
+    ).build()
+    
+    # Context established: Carmen Kim profile
     
     # Default config - will be overridden by LaunchDarkly AI configs
     default_cfg = AIConfig(
@@ -197,24 +268,15 @@ def main() -> None:
         messages=[]
     )
 
-    cfg, tracker = ai_client.config(LD_KEY, context, default_cfg, {})
-    
-    # Debug what LaunchDarkly actually returned vs our defaults
-    logging.info(f"=== AI CONFIG DEBUG ===")
-    logging.info(f"Our default model: {default_cfg.model.name}")
-    logging.info(f"Our default messages count: {len(default_cfg.messages)}")
-    logging.info(f"LaunchDarkly returned model: {cfg.model.name if cfg.model else 'None'}")
-    logging.info(f"LaunchDarkly returned messages count: {len(cfg.messages) if cfg.messages else 0}")
-    logging.info(f"Final model being used: {cfg.model.name if cfg.model else 'fallback'}")
-    logging.info(f"=== END DEBUG ===")
+    # Get initial config to extract static parameters (KB_ID, GR_ID, etc.)
+    initial_cfg, _ = ai_client.config(LD_KEY, context, default_cfg, {})
     
     # Get configuration values from LaunchDarkly AI config custom parameters
-    # Custom parameters are stored under model.custom in the config dict
-    config_dict = cfg.to_dict()
+    config_dict = initial_cfg.to_dict()
     model_config = config_dict.get('model', {})
     custom_params = model_config.get('custom', {})
     
-    logging.info(f"Retrieved custom_params: {custom_params}")
+
     
     KB_ID = custom_params.get('kb_id')
     GR_ID = custom_params.get('gr_id') 
@@ -228,29 +290,40 @@ def main() -> None:
         logging.error(f"gr_id not found. custom_params: {custom_params}")
         sys.exit("✖  Missing gr_id in LaunchDarkly AI config custom parameters")
     
-    # Debug the configuration
-    logging.info(f"AI Config received: enabled={cfg.enabled}, model={cfg.model}")
-    logging.info(f"Custom params: kb_id={KB_ID}, gr_id={GR_ID}, gr_version={GR_VER}")
-    
-    # Debug LLM-as-judge configuration
-    llm_as_judge = custom_params.get('llm_as_judge', 'us.anthropic.claude-3-5-sonnet-20241022-v2:0')
+    # Get evaluation frequency configuration
     eval_freq = float(custom_params.get('eval_freq', '1.0'))  # Default to 100% evaluation
-    logging.info(f"LLM-as-judge model: {llm_as_judge}")
-    logging.info(f"Evaluation frequency: {eval_freq*100:.1f}%")
-    
-    model_id = cfg.model.name if cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
-    history  = list(cfg.messages) if cfg.messages else []   # seed messages from LD
 
-    logging.info(f"Generated unique user: {unique_user_key}")
-    print_box("READY", f"User: {unique_user_key}\nMLOps model: {model_id}\nGuardrail: {GR_ID}@v{GR_VER}\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
+
+    print_box("READY", f"User: Carmen Kim (customer_066)\nCity: Seattle, WA | Tier: Bronze\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
 
     while True:
         user = input("\n🧑  You: ").strip()
         if user.lower() in {"exit", "quit"}:
             break
 
-        passages = get_kb_passages(user, KB_ID)
-        print_box("RAG DEBUG", f"Knowledge Base ID: {KB_ID}\nQuery: {user}\nPassages Retrieved: {passages[:200]}..." if len(passages) > 200 else f"Knowledge Base ID: {KB_ID}\nPassages Retrieved: {passages}")
+        # Get AI config with user input as variable for this specific query
+        query_variables = {"userInput": user}
+        cfg, tracker = ai_client.config(LD_KEY, context, default_cfg, query_variables)
+        
+        model_id = cfg.model.name if cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        history  = list(cfg.messages) if cfg.messages else []   # seed messages from LD (with variables replaced)
+
+        # Establish user context BEFORE RAG call for personalized search
+        user_context_name = "Carmen Kim"  # From our established context
+        
+        # Enhance RAG query with user context for better retrieval
+        if any(word in user.lower() for word in ["my", "i", "me", "mine"]):
+            # Personal queries should include the user's name for better RAG results
+            enhanced_query = f"{user_context_name} {user}"
+        else:
+            # Non-personal queries don't need user context
+            enhanced_query = user
+            
+        passages = get_kb_passages(enhanced_query, KB_ID)
+        
+        # Show both original and enhanced query in debug
+        query_info = f"Original Query: {user}\nEnhanced Query: {enhanced_query}" if enhanced_query != user else f"Query: {user}"
+        print_box("RAG DEBUG", f"Knowledge Base ID: {KB_ID}\n{query_info}\nPassages Retrieved: {passages[:200]}..." if len(passages) > 200 else f"Knowledge Base ID: {KB_ID}\n{query_info}\nPassages Retrieved: {passages}")
         
         prompt   = build_guardrail_prompt(passages, user)
         print_box("PROMPT DEBUG", f"Final prompt sent to Bedrock:\n{prompt[:300]}..." if len(prompt) > 300 else prompt)
@@ -278,12 +351,7 @@ def main() -> None:
         convo_msgs = map_messages(history) + [{"role": "user", "content": user_content}]
         system_msgs = extract_system_messages(history)
 
-        # Debug: Show what system messages are being sent to Bedrock
-        logging.info(f"=== SYSTEM MESSAGES DEBUG ===")
-        logging.info(f"Number of system messages: {len(system_msgs)}")
-        for i, msg in enumerate(system_msgs):
-            logging.info(f"System message {i+1}: {msg['text'][:200]}..." if len(msg['text']) > 200 else f"System message {i+1}: {msg['text']}")
-        logging.info(f"=== END SYSTEM DEBUG ===")
+
 
         t0 = time.time()
         try:
@@ -345,26 +413,12 @@ def main() -> None:
             # Calculate timing metrics
             total_latency = time.time() - t0
             
-            # Debug: Show what metrics were tracked
-            logging.info(f"LaunchDarkly AI tracked metrics: duration={duration_ms}ms, time_to_first_token={duration_ms}ms, tokens={total_tokens}, input={input_tokens}, output={output_tokens}")
+            # Track performance metrics
 
             # trace object now lives at response["trace"]["guardrail"]
             g_trace = raw.get("trace", {}).get("guardrail", {})
             
-            # Debug guardrail assessment details
-            logging.info(f"=== GUARDRAIL DEBUG ===")
-            logging.info(f"Full guardrail trace keys: {list(g_trace.keys()) if g_trace else 'None'}")
-            output_assessments = g_trace.get("outputAssessments", {})
-            if output_assessments:
-                logging.info(f"Output assessments found for: {list(output_assessments.keys())}")
-                for guardrail_id, assessments in output_assessments.items():
-                    if isinstance(assessments, list) and len(assessments) > 0:
-                        assessment = assessments[0]
-                        logging.info(f"Assessment keys: {list(assessment.keys())}")
-                        if "contextualGroundingPolicy" in assessment:
-                            cg_policy = assessment["contextualGroundingPolicy"]
-                            logging.info(f"Contextual grounding policy: {cg_policy}")
-            logging.info(f"=== END GUARDRAIL DEBUG ===")
+            # Extract guardrail scores
             
             # Extract grounding and relevance scores from output assessments
             grounding = None
@@ -418,16 +472,9 @@ def main() -> None:
         print_box("ASSISTANT", reply_txt)
 
         # ── factual accuracy check ────────────────────────────────────────────
-        # Use eval_freq to control how often we run the expensive accuracy check
-        factual_accuracy = None
-        random_value = random.random()
-        should_evaluate = random_value < eval_freq
-        
-        if should_evaluate:
-            factual_accuracy = check_factual_accuracy(passages, reply_txt, model_id, custom_params)
+        factual_accuracy = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context)
+        if factual_accuracy is not None:
             logging.info(f"Accuracy score: {factual_accuracy:.3f}")
-        else:
-            logging.info(f"Accuracy check skipped (random={random_value:.3f} >= eval_freq={eval_freq:.1f}) - cost savings mode")
 
         # ── feedback ──────────────────────────────────────────────────────────
         print_box("FEEDBACK", "👍  Was this helpful? (y/n)")
@@ -471,8 +518,7 @@ def main() -> None:
                 metric_value=factual_accuracy_percentage
             )
             logging.info(f"Sent accuracy metric to LaunchDarkly: {factual_accuracy_percentage:.1f}%")
-        else:
-            logging.info(f"Accuracy metric not sent to LaunchDarkly (check skipped for cost savings)")
+
 
         # ── session summary ──────────────────────────────────────────────────
         met = reply_obj.get("metrics", {})
