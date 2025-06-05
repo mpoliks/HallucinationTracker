@@ -209,8 +209,14 @@ def main() -> None:
     # Generate unique user for fresh experiment exposure each time
     unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
     
-    # Basic context - user details should come from AI config context attributes
-    context = Context.builder(unique_user_key).kind("user").build()
+    # Set up Catherine Liu's profile for context variables (from customer_024.txt)
+    context = Context.builder(unique_user_key).kind("user").name("Catherine Liu").set(
+        "location", "Boston, MA"
+    ).set(
+        "tier", "Silver"
+    ).set(
+        "userName", "Catherine Liu"
+    ).build()
     
     # Default config - will be overridden by LaunchDarkly AI configs
     default_cfg = AIConfig(
@@ -245,7 +251,7 @@ def main() -> None:
     eval_freq = float(custom_params.get('eval_freq', '1.0'))  # Default to 100% evaluation
 
 
-    print_box("READY", f"User: {unique_user_key}\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
+    print_box("READY", f"User: Catherine Liu (Silver Tier)\nCity: Boston, MA | Average Balance: <1k\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
 
     while True:
         user = input("\n🧑  You: ").strip()
