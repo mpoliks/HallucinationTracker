@@ -8,7 +8,7 @@ chat_rag_guardrail.py – Terminal chat bot with:
 
 Keys come from .env in the same folder.
 """
-import os, sys, json, signal, hashlib, logging, textwrap, time, uuid
+import os, sys, json, signal, hashlib, logging, textwrap, time, uuid, random
 from typing import List, Dict, Any
 
 import dotenv, boto3, botocore
@@ -156,11 +156,20 @@ class SimpleMessage:
 # graceful Ctrl-C
 signal.signal(signal.SIGINT, lambda *_: sys.exit("\n👋  bye!"))
 
-def check_factual_accuracy(source_passages: str, response_text: str, model_id: str) -> float:
+def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict) -> float:
     """
     Check factual accuracy by extracting and comparing key facts
     Returns a score from 0.0 to 1.0 representing factual accuracy
+    
+    Uses a dedicated fact-checking model from LaunchDarkly AI Config for independent evaluation
     """
+    
+    # Get LLM-as-judge model from LaunchDarkly AI Config custom parameters
+    fact_checker_model = custom_params.get('llm_as_judge', 'us.anthropic.claude-3-5-sonnet-20241022-v2:0')
+    
+    # Log which models are being used for transparency
+    logging.info(f"Generator model: {generator_model_id}, LLM-as-judge model: {fact_checker_model}")
+    
     fact_check_prompt = f"""
 You are a fact-checking expert. Compare the response against the source material and identify any factual errors.
 
@@ -185,7 +194,7 @@ Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurat
 
     try:
         fact_check_response = bedrock.converse(
-            modelId=model_id,
+            modelId=fact_checker_model,  # Use LLM-as-judge from LaunchDarkly config
             messages=[
                 {
                     "role": "user", 
@@ -263,6 +272,12 @@ def main() -> None:
     # Debug the configuration
     logging.info(f"AI Config received: enabled={cfg.enabled}, model={cfg.model}")
     logging.info(f"Custom params: kb_id={KB_ID}, gr_id={GR_ID}, gr_version={GR_VER}")
+    
+    # Debug LLM-as-judge configuration
+    llm_as_judge = custom_params.get('llm_as_judge', 'us.anthropic.claude-3-5-sonnet-20241022-v2:0')
+    eval_freq = float(custom_params.get('eval_freq', '1.0'))  # Default to 100% evaluation
+    logging.info(f"LLM-as-judge model: {llm_as_judge}")
+    logging.info(f"Evaluation frequency: {eval_freq*100:.1f}%")
     
     model_id = cfg.model.name if cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
     history  = list(cfg.messages) if cfg.messages else []   # seed messages from LD
@@ -444,8 +459,16 @@ def main() -> None:
         print_box("ASSISTANT", reply_txt)
 
         # ── factual accuracy check ────────────────────────────────────────────
-        factual_accuracy = check_factual_accuracy(passages, reply_txt, model_id)
-        logging.info(f"Accuracy score: {factual_accuracy:.3f}")
+        # Use eval_freq to control how often we run the expensive accuracy check
+        factual_accuracy = None
+        random_value = random.random()
+        should_evaluate = random_value < eval_freq
+        
+        if should_evaluate:
+            factual_accuracy = check_factual_accuracy(passages, reply_txt, model_id, custom_params)
+            logging.info(f"Accuracy score: {factual_accuracy:.3f}")
+        else:
+            logging.info(f"Accuracy check skipped (random={random_value:.3f} >= eval_freq={eval_freq:.1f}) - cost savings mode")
 
         # ── feedback ──────────────────────────────────────────────────────────
         print_box("FEEDBACK", "👍  Was this helpful? (y/n)")
@@ -480,20 +503,23 @@ def main() -> None:
             logging.info(f"Sent relevance metric to LaunchDarkly: {relevance_percentage:.1f}%")
 
         # ── accuracy metric for LaunchDarkly (factual accuracy = anti-hallucination) ───────────────────
-        factual_accuracy_percentage = factual_accuracy * 100
-        ld.track(
-            "$ld:ai:hallucinations",
-            context,
-            data=None,
-            metric_value=factual_accuracy_percentage
-        )
-        logging.info(f"Sent accuracy metric to LaunchDarkly: {factual_accuracy_percentage:.1f}%")
+        if factual_accuracy is not None:
+            factual_accuracy_percentage = factual_accuracy * 100
+            ld.track(
+                "$ld:ai:hallucinations",
+                context,
+                data=None,
+                metric_value=factual_accuracy_percentage
+            )
+            logging.info(f"Sent accuracy metric to LaunchDarkly: {factual_accuracy_percentage:.1f}%")
+        else:
+            logging.info(f"Accuracy metric not sent to LaunchDarkly (check skipped for cost savings)")
 
         # ── session summary ──────────────────────────────────────────────────
         met = reply_obj.get("metrics", {})
         grounding_str = f"{grounding:.2f}" if grounding is not None else "None"
         relevance_str = f"{relevance:.2f}" if relevance is not None else "None"
-        accuracy_str = f"{factual_accuracy:.2f}"
+        accuracy_str = f"{factual_accuracy:.2f}" if factual_accuracy is not None else "SKIPPED"
         summary = (
             f"Latency: {latency} ms | Bedrock tokens in/out: "
             f"{input_tokens}/{output_tokens} | "
