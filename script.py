@@ -16,7 +16,7 @@ import ldclient
 from ldclient.config import Config
 from ldclient import Context
 from ldai.client import LDAIClient, AIConfig, ModelConfig
-from ldai.tracker import FeedbackKind, TokenUsage
+from ldai.tracker import FeedbackKind
 
 # ── setup & helpers ───────────────────────────────────────────────────────────
 dotenv.load_dotenv()
@@ -146,7 +146,7 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
     judge_variables = {
         "source_passages": source_passages,
         "response_text": response_text,
-        "user_context": "Carmen Kim"  # Add user context for proper fact-checking
+        "user_context": context.name or "Anonymous User"  # Get from LaunchDarkly context
     }
     
     judge_cfg, judge_tracker = ai_client.config(LD_JUDGE_KEY, context, judge_default_cfg, judge_variables)
@@ -154,40 +154,17 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
     # Get judge model from LaunchDarkly config
     fact_checker_model = judge_cfg.model.name if judge_cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
     
-    # Get the final prompt from LaunchDarkly AI config (variables already replaced)
-    if judge_cfg.messages and len(judge_cfg.messages) > 0:
-        # LaunchDarkly has already replaced {{source_passages}} and {{response_text}} with actual content
-        fact_check_prompt = judge_cfg.messages[0].content
-
-    else:
-        # Fallback: manual replacement if LaunchDarkly config not available
-        fact_check_prompt = f"""You are a fact-checking expert. Compare the response against the source material and identify any factual errors.
-
-SOURCE MATERIAL:
-{source_passages}
-
-RESPONSE TO CHECK:
-{response_text}
-
-Instructions:
-1. Extract key factual claims from the response (names, numbers, dates, policies, requirements)
-2. Check each factual claim against the source material
-3. Ignore tone, style, helpfulness - focus ONLY on factual accuracy
-4. Return a JSON with:
-   - "factual_claims": list of key facts claimed in response
-   - "accurate_claims": list of claims that are accurate per source
-   - "inaccurate_claims": list of claims that are wrong or unsupported
-   - "accuracy_score": decimal from 0.0 to 1.0
-
-Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurate_claims": [...], "accuracy_score": 0.95}}"""
+    # Get the prompt from LaunchDarkly AI config (variables already replaced)
+    if not (judge_cfg.messages and len(judge_cfg.messages) > 0):
+        raise ValueError("LLM-as-judge AI config must have a system message - no fallback available")
+    
+    fact_check_prompt = judge_cfg.messages[0].content
 
     
     # Execute fact-checking
 
     try:
-        # Track timing and performance metrics for LLM-as-judge
-        judge_start_time = time.time()
-        
+        # Call LLM-as-judge and track with SDK
         fact_check_response = bedrock.converse(
             modelId=fact_checker_model,  # Use LLM-as-judge from LaunchDarkly config
             messages=[
@@ -198,28 +175,8 @@ Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurat
             ]
         )
         
-        judge_end_time = time.time()
-        judge_duration_ms = int((judge_end_time - judge_start_time) * 1000)
-        
         # Use provider-specific tracking method for judge model
-        try:
-            judge_tracker.track_bedrock_converse_metrics(fact_check_response)
-            logging.info("LLM-as-judge used track_bedrock_converse_metrics for automatic metric tracking")
-        except Exception as e:
-            logging.info(f"LLM-as-judge track_bedrock_converse_metrics failed: {e}, falling back to manual tracking")
-            # Fallback to manual tracking
-            judge_tracker.track_success()
-            judge_tracker.track_duration(judge_duration_ms)
-            judge_tracker.track_time_to_first_token(judge_duration_ms)
-            
-            judge_usage = fact_check_response.get("usage", {})
-            judge_input_tokens = judge_usage.get("inputTokens", 0)
-            judge_output_tokens = judge_usage.get("outputTokens", 0)
-            judge_total_tokens = judge_input_tokens + judge_output_tokens
-            
-            if judge_total_tokens > 0:
-                judge_token_usage = TokenUsage(total=judge_total_tokens, input=judge_input_tokens, output=judge_output_tokens)
-                judge_tracker.track_tokens(judge_token_usage)
+        judge_tracker.track_bedrock_converse_metrics(fact_check_response)
         
         # Track judge model performance
         
@@ -252,19 +209,8 @@ def main() -> None:
     # Generate unique user for fresh experiment exposure each time
     unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
     
-    # Set up Carmen Kim's profile for context variables
-    # Try both flat and nested attributes to match LaunchDarkly template expectations
-    context = Context.builder(unique_user_key).kind("user").name("Carmen Kim").set(
-        "location", "Seattle, WA"
-    ).set(
-        "tier", "Bronze"
-    ).set(
-        "userName", "Carmen Kim"
-    ).set(
-        "user", {"tier": "Bronze", "name": "Carmen Kim"}  # Try nested structure too
-    ).build()
-    
-    # Context established: Carmen Kim profile
+    # Basic context - user details should come from AI config context attributes
+    context = Context.builder(unique_user_key).kind("user").build()
     
     # Default config - will be overridden by LaunchDarkly AI configs
     default_cfg = AIConfig(
@@ -299,7 +245,7 @@ def main() -> None:
     eval_freq = float(custom_params.get('eval_freq', '1.0'))  # Default to 100% evaluation
 
 
-    print_box("READY", f"User: Carmen Kim (customer_066)\nCity: Seattle, WA | Tier: Bronze\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
+    print_box("READY", f"User: {unique_user_key}\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
 
     while True:
         user = input("\n🧑  You: ").strip()
@@ -313,8 +259,8 @@ def main() -> None:
         model_id = cfg.model.name if cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
         history  = list(cfg.messages) if cfg.messages else []   # seed messages from LD (with variables replaced)
 
-        # Establish user context BEFORE RAG call for personalized search
-        user_context_name = "Carmen Kim"  # From our established context
+        # Extract user context from LaunchDarkly context for personalized search
+        user_context_name = context.name  # Get from LaunchDarkly context
         
         # Enhance RAG query with user context for better retrieval
         if any(word in user.lower() for word in ["my", "i", "me", "mine"]):
@@ -358,7 +304,6 @@ def main() -> None:
 
 
 
-        t0 = time.time()
         try:
             # Build converse parameters
             converse_params = {
@@ -375,40 +320,22 @@ def main() -> None:
             if system_msgs:
                 converse_params["system"] = system_msgs
                 
-            # Call Bedrock directly and measure timing
-            start_time = time.time()
+            # Call Bedrock and track with SDK
             raw = bedrock.converse(**converse_params)
-            end_time = time.time()
             
-            # Calculate duration in milliseconds
-            duration_ms = int((end_time - start_time) * 1000)
-            
-            # Extract token usage for display metrics (needed regardless of tracking method)
+            # Extract token usage for display metrics
             usage = raw.get("usage", {})
             input_tokens = usage.get("inputTokens", 0)
             output_tokens = usage.get("outputTokens", 0)
             total_tokens = input_tokens + output_tokens
             
             # Use provider-specific tracking method for Bedrock
-            try:
-                tracker.track_bedrock_converse_metrics(raw)
-                logging.info("Used track_bedrock_converse_metrics for automatic metric tracking")
-            except Exception as e:
-                logging.info(f"track_bedrock_converse_metrics failed: {e}, falling back to manual tracking")
-                # Fallback to manual tracking
-                tracker.track_success()
-                tracker.track_duration(duration_ms)
-                tracker.track_time_to_first_token(duration_ms)
-                
-                if total_tokens > 0:
-                    token_usage = TokenUsage(total=total_tokens, input=input_tokens, output=output_tokens)
-                    tracker.track_tokens(token_usage)
+            tracker.track_bedrock_converse_metrics(raw)
             
             # Create a wrapped response object for compatibility
             reply_obj = {
                 "output": raw["output"],
                 "metrics": {
-                    "latencyMs": duration_ms,
                     "tokens": {
                         "total": total_tokens,
                         "input": input_tokens,
@@ -416,9 +343,6 @@ def main() -> None:
                     }
                 }
             }
-            
-            # Calculate timing metrics
-            total_latency = time.time() - t0
             
 
 
@@ -470,7 +394,7 @@ def main() -> None:
             # Fallback: extract from raw response structure
             reply_txt = raw["output"]["message"]["content"][0]["text"]
             
-        latency   = int((time.time() - t0)*1000)
+        latency   = "N/A"  # Handled by SDK tracking
         
         # Get token usage from our tracked metrics
         input_tokens = reply_obj.get("metrics", {}).get("tokens", {}).get("input", "?")
