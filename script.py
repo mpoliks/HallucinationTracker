@@ -201,20 +201,25 @@ Response format: {{"factual_claims": [...], "accurate_claims": [...], "inaccurat
         judge_end_time = time.time()
         judge_duration_ms = int((judge_end_time - judge_start_time) * 1000)
         
-        # Track success and performance metrics for judge model
-        judge_tracker.track_success()
-        judge_tracker.track_duration(judge_duration_ms)
-        judge_tracker.track_time_to_first_token(judge_duration_ms)  # For non-streaming, TTFT equals total time
-        
-        # Extract and track token usage for judge model
-        judge_usage = fact_check_response.get("usage", {})
-        judge_input_tokens = judge_usage.get("inputTokens", 0)
-        judge_output_tokens = judge_usage.get("outputTokens", 0)
-        judge_total_tokens = judge_input_tokens + judge_output_tokens
-        
-        if judge_total_tokens > 0:
-            judge_token_usage = TokenUsage(total=judge_total_tokens, input=judge_input_tokens, output=judge_output_tokens)
-            judge_tracker.track_tokens(judge_token_usage)
+        # Use provider-specific tracking method for judge model
+        try:
+            judge_tracker.track_bedrock_converse_metrics(fact_check_response)
+            logging.info("LLM-as-judge used track_bedrock_converse_metrics for automatic metric tracking")
+        except Exception as e:
+            logging.info(f"LLM-as-judge track_bedrock_converse_metrics failed: {e}, falling back to manual tracking")
+            # Fallback to manual tracking
+            judge_tracker.track_success()
+            judge_tracker.track_duration(judge_duration_ms)
+            judge_tracker.track_time_to_first_token(judge_duration_ms)
+            
+            judge_usage = fact_check_response.get("usage", {})
+            judge_input_tokens = judge_usage.get("inputTokens", 0)
+            judge_output_tokens = judge_usage.get("outputTokens", 0)
+            judge_total_tokens = judge_input_tokens + judge_output_tokens
+            
+            if judge_total_tokens > 0:
+                judge_token_usage = TokenUsage(total=judge_total_tokens, input=judge_input_tokens, output=judge_output_tokens)
+                judge_tracker.track_tokens(judge_token_usage)
         
         # Track judge model performance
         
@@ -378,24 +383,26 @@ def main() -> None:
             # Calculate duration in milliseconds
             duration_ms = int((end_time - start_time) * 1000)
             
-            # Track success and duration with LaunchDarkly
-            tracker.track_success()
-            tracker.track_duration(duration_ms)
-            
-            # For non-streaming responses, time to first token equals total time
-            # since all tokens arrive together in one response
-            tracker.track_time_to_first_token(duration_ms)
-            
-            # Extract and track token usage
+            # Extract token usage for display metrics (needed regardless of tracking method)
             usage = raw.get("usage", {})
             input_tokens = usage.get("inputTokens", 0)
             output_tokens = usage.get("outputTokens", 0)
             total_tokens = input_tokens + output_tokens
             
-            if total_tokens > 0:
-                # Track usage with TokenUsage object for LaunchDarkly
-                token_usage = TokenUsage(total=total_tokens, input=input_tokens, output=output_tokens)
-                tracker.track_tokens(token_usage)
+            # Use provider-specific tracking method for Bedrock
+            try:
+                tracker.track_bedrock_converse_metrics(raw)
+                logging.info("Used track_bedrock_converse_metrics for automatic metric tracking")
+            except Exception as e:
+                logging.info(f"track_bedrock_converse_metrics failed: {e}, falling back to manual tracking")
+                # Fallback to manual tracking
+                tracker.track_success()
+                tracker.track_duration(duration_ms)
+                tracker.track_time_to_first_token(duration_ms)
+                
+                if total_tokens > 0:
+                    token_usage = TokenUsage(total=total_tokens, input=input_tokens, output=output_tokens)
+                    tracker.track_tokens(token_usage)
             
             # Create a wrapped response object for compatibility
             reply_obj = {
@@ -413,7 +420,7 @@ def main() -> None:
             # Calculate timing metrics
             total_latency = time.time() - t0
             
-            # Track performance metrics
+
 
             # trace object now lives at response["trace"]["guardrail"]
             g_trace = raw.get("trace", {}).get("guardrail", {})
