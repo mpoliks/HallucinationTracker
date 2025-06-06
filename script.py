@@ -9,7 +9,7 @@ chat_rag_guardrail.py – Terminal chat bot with:
 Keys come from .env in the same folder.
 """
 import os, sys, json, signal, hashlib, logging, textwrap, time, uuid, random
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 
 import dotenv, boto3, botocore
 import ldclient
@@ -38,8 +38,11 @@ if not (LD_SDK and LD_KEY and LD_JUDGE_KEY):
 # LD initialisation
 ldclient.set_config(Config(LD_SDK))
 ld = ldclient.get()
+
+# Check for successful initialization. is_initialized() is True once the client
+# has successfully connected, or has received a valid initial data set.
 if not ld.is_initialized():
-    sys.exit("✖  LaunchDarkly SDK failed to initialise")
+    sys.exit("✖  LaunchDarkly SDK failed to initialize. Check SDK key and network.")
 
 ai_client = LDAIClient(ld)
 
@@ -118,10 +121,10 @@ class SimpleMessage:
 # graceful Ctrl-C
 signal.signal(signal.SIGINT, lambda *_: sys.exit("\n👋  bye!"))
 
-def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context) -> float:
+def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context) -> tuple[Union[float, None], Union[str, None], Union[int, None], Union[int, None]]:
     """
     Check factual accuracy by extracting and comparing key facts
-    Returns a score from 0.0 to 1.0 representing factual accuracy
+    Returns a tuple containing: (score, judge_model_name, judge_input_tokens, judge_output_tokens)
     
     Uses a dedicated LaunchDarkly AI Config for LLM-as-judge evaluation
     """
@@ -132,7 +135,7 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
     should_evaluate = random_value < eval_freq
     
     if not should_evaluate:
-        return None
+        return None, None, None, None
     
     # Get LLM-as-judge configuration from separate LaunchDarkly AI config
     judge_default_cfg = AIConfig(
@@ -182,27 +185,32 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
         
         fact_result = fact_check_response["output"]["message"]["content"][0]["text"]
         
+        usage = fact_check_response.get("usage", {})
+        judge_input_tokens = usage.get("inputTokens")
+        judge_output_tokens = usage.get("outputTokens")
+        
         # Process judge response
         
         # Parse JSON response
         import json
         try:
             fact_data = json.loads(fact_result)
-            return fact_data.get("accuracy_score", 0.0)
+            accuracy_score = fact_data.get("accuracy_score", 0.0)
+            return accuracy_score, fact_checker_model, judge_input_tokens, judge_output_tokens
         except json.JSONDecodeError:
             # Fallback: try to extract score from text
             if "accuracy_score" in fact_result:
                 import re
                 score_match = re.search(r'"accuracy_score":\s*([0-9.]+)', fact_result)
                 if score_match:
-                    return float(score_match.group(1))
-            return 0.0
+                    return float(score_match.group(1)), fact_checker_model, judge_input_tokens, judge_output_tokens
+            return 0.0, fact_checker_model, judge_input_tokens, judge_output_tokens
             
     except Exception as e:
         # Track error for judge model
         judge_tracker.track_error()
         logging.error(f"Factual accuracy check failed: {e}")
-        return 0.0
+        return 0.0, None, None, None
 
 # ── main loop ────────────────────────────────────────────────────────────────
 def main() -> None:
@@ -414,7 +422,7 @@ def main() -> None:
         print_box("ASSISTANT", reply_txt)
 
         # ── factual accuracy check ────────────────────────────────────────────
-        factual_accuracy = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context)
+        factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context)
         if factual_accuracy is not None:
             logging.info(f"Accuracy score: {factual_accuracy:.3f}")
 

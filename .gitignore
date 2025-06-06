@@ -197,3 +197,4 @@ auto_tester.log
 # Testing outputs
 test_output_*
 coverage_* 
+node_modules

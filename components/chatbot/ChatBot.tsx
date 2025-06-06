@@ -374,7 +374,9 @@ function ChatBotInterface({
 							{aiNewModelChatbotFlag?._ldMeta?.enabled && (
 								<div className="space-y-4">
 									<div className="flex w-max max-w-[75%] flex-col gap-2 rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-800">
-										Hello! How can I assist you today?
+										{userObject && userObject.personaname
+											? `Hello ${userObject.personaname}! How can I assist you today?`
+											: "Hello! How can I assist you today?"}
 									</div>
 									{messages.map((m) => {
 										if (m?.role === "assistant") {
@@ -442,12 +444,32 @@ function ChatBotInterface({
 															</span>
 														</div>
 													)}
-													{lastMetrics.factual_accuracy !== undefined && (
+													{lastMetrics.factual_accuracy_score !== undefined && (
 														<div className="flex justify-between">
 															<span>Factual Accuracy:</span>
-															<span className={lastMetrics.factual_accuracy >= 0.8 ? 'text-green-600' : 'text-orange-600'}>
-																{(lastMetrics.factual_accuracy * 100).toFixed(1)}%
+															<span className={lastMetrics.factual_accuracy_score >= 0.8 ? 'text-green-600' : 'text-orange-600'}>
+																{(lastMetrics.factual_accuracy_score * 100).toFixed(1)}%
 															</span>
+														</div>
+													)}
+													{lastMetrics.judge_model_name && (
+														<div className="flex justify-between">
+															<span>LLM-as-Judge Model:</span>
+															<span className="text-gray-400">
+																{lastMetrics.judge_model_name}
+															</span>
+														</div>
+													)}
+													{(lastMetrics.input_tokens !== undefined && lastMetrics.output_tokens !== undefined) && (
+														<div className="flex justify-between">
+															<span>Response Tokens (In/Out):</span>
+															<span>{lastMetrics.input_tokens}/{lastMetrics.output_tokens}</span>
+														</div>
+													)}
+													{(lastMetrics.judge_input_tokens !== undefined && lastMetrics.judge_output_tokens !== undefined) && (
+														<div className="flex justify-between">
+															<span>Judge Tokens (In/Out):</span>
+															<span>{lastMetrics.judge_input_tokens}/{lastMetrics.judge_output_tokens}</span>
 														</div>
 													)}
 													{lastMetrics.processing_latency_ms !== undefined && (
