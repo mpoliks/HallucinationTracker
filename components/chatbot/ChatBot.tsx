@@ -428,6 +428,14 @@ function ChatBotInterface({
 											</Button>
 											{showMetrics && (
 												<div className="mt-2 text-xs text-gray-600 bg-gray-50 dark:bg-gray-800 rounded p-3 space-y-1">
+													{lastMetrics.factual_accuracy_score !== undefined && (
+														<div className="flex justify-between">
+															<span>Factual Accuracy:</span>
+															<span className={lastMetrics.factual_accuracy_score >= 0.8 ? 'text-green-600' : 'text-orange-600'}>
+																{(lastMetrics.factual_accuracy_score * 100).toFixed(1)}%
+															</span>
+														</div>
+													)}
 													{lastMetrics.grounding_score !== undefined && (
 														<div className="flex justify-between">
 															<span>Grounding Score:</span>
@@ -441,14 +449,6 @@ function ChatBotInterface({
 															<span>Relevance Score:</span>
 															<span className={lastMetrics.relevance_score >= (lastMetrics.relevance_threshold || 0.7) ? 'text-green-600' : 'text-orange-600'}>
 																{(lastMetrics.relevance_score * 100).toFixed(1)}% (threshold: {((lastMetrics.relevance_threshold || 0) * 100).toFixed(1)}%)
-															</span>
-														</div>
-													)}
-													{lastMetrics.factual_accuracy_score !== undefined && (
-														<div className="flex justify-between">
-															<span>Factual Accuracy:</span>
-															<span className={lastMetrics.factual_accuracy_score >= 0.8 ? 'text-green-600' : 'text-orange-600'}>
-																{(lastMetrics.factual_accuracy_score * 100).toFixed(1)}%
 															</span>
 														</div>
 													)}

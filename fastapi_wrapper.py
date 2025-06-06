@@ -185,7 +185,8 @@ async def chat_endpoint(request: ChatRequest):
             enhanced_query = request.userInput
             
         passages = get_kb_passages(enhanced_query, KB_ID)
-        prompt = build_guardrail_prompt(passages, request.userInput)
+        context_dict = context.to_dict()
+        prompt = build_guardrail_prompt(passages, request.userInput, context_dict)
 
         # Assemble conversation in Bedrock's expected format
         user_content = [

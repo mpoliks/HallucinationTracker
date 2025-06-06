@@ -103,8 +103,16 @@ def extract_system_messages(msgs) -> List[Dict[str, str]]:
     """Extract system messages for the system parameter"""
     return [{"text": m.content} for m in msgs if m.role == "system"]
 
-def build_guardrail_prompt(passages: str, question: str) -> str:
-    return f"Source Information:\n{passages}\n\nCustomer Question: {question}"
+def build_guardrail_prompt(passages: str, user_input: str, context: dict = None) -> str:
+    """
+    Builds the prompt for the guardrail, including passages and user input.
+    Optionally includes user context if provided.
+    """
+    if context:
+        context_str = "\n".join([f"{key}: {value}" for key, value in context.items()])
+        return f"User Context:\n{context_str}\n\nPassages:\n{passages}\n\nUser Question: {user_input}"
+    else:
+        return f"Passages:\n{passages}\n\nUser Question: {user_input}"
 
 # Simple Message class to match expected structure
 class SimpleMessage:
@@ -304,7 +312,7 @@ def main() -> None:
         query_info = f"Original Query: {user}\nEnhanced Query: {enhanced_query}" if enhanced_query != user else f"Query: {user}"
         print_box("RAG DEBUG", f"Knowledge Base ID: {KB_ID}\n{query_info}\nPassages Retrieved: {passages[:200]}..." if len(passages) > 200 else f"Knowledge Base ID: {KB_ID}\n{query_info}\nPassages Retrieved: {passages}")
         
-        prompt   = build_guardrail_prompt(passages, user)
+        prompt   = build_guardrail_prompt(passages, user, context.to_dict())
         print_box("PROMPT DEBUG", f"Final prompt sent to Bedrock:\n{prompt[:300]}..." if len(prompt) > 300 else prompt)
 
         # assemble conversation in Bedrock's expected format with proper guardrail structure
