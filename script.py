@@ -121,6 +121,15 @@ class SimpleMessage:
 # graceful Ctrl-C
 signal.signal(signal.SIGINT, lambda *_: sys.exit("\n👋  bye!"))
 
+MODEL_ID_TO_NAME_MAP = {
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0": "Claude Sonnet",
+    "anthropic.claude-3-sonnet-20240229-v1:0": "Claude Sonnet",
+    "amazon.titan-text-express-v1": "Titan Text Express",
+    "cohere.command-text-v14": "Cohere Command",
+    "ai21.j2-mid-v1": "Jurassic-2 Mid",
+    "us.anthropic.claude-sonnet-4-20250514-v1:0": "Claude Sonnet"
+}
+
 def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context) -> tuple[Union[float, None], Union[str, None], Union[int, None], Union[int, None]]:
     """
     Check factual accuracy by extracting and comparing key facts
@@ -196,15 +205,15 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
         try:
             fact_data = json.loads(fact_result)
             accuracy_score = fact_data.get("accuracy_score", 0.0)
-            return accuracy_score, fact_checker_model, judge_input_tokens, judge_output_tokens
+            return accuracy_score, MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model), judge_input_tokens, judge_output_tokens
         except json.JSONDecodeError:
             # Fallback: try to extract score from text
             if "accuracy_score" in fact_result:
                 import re
                 score_match = re.search(r'"accuracy_score":\s*([0-9.]+)', fact_result)
                 if score_match:
-                    return float(score_match.group(1)), fact_checker_model, judge_input_tokens, judge_output_tokens
-            return 0.0, fact_checker_model, judge_input_tokens, judge_output_tokens
+                    return float(score_match.group(1)), MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model), judge_input_tokens, judge_output_tokens
+            return 0.0, MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model), judge_input_tokens, judge_output_tokens
             
     except Exception as e:
         # Track error for judge model
