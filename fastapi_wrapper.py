@@ -61,104 +61,77 @@ ldclient.set_config(Config(LD_SDK))
 ld = ldclient.get()
 ai_client = LDAIClient(ld)
 
-# AWS clients with improved credential handling
+# AWS clients with SSO authentication
 def initialize_aws_clients():
     """
-    Initialize AWS clients with multiple credential sources in order of preference:
-    1. AWS CLI profile (togglebank)
-    2. Default AWS CLI profile  
-    3. Environment variables
-    4. IAM roles (if running on AWS)
+    Initialize AWS clients using SSO profile 'marek'.
+    This is the recommended secure authentication method.
     """
     import boto3
-    from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound
+    from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound, TokenRetrievalError
     
     region = os.getenv("AWS_REGION", "us-east-1")
     
-    # Try AWS CLI profile first (recommended approach)
     try:
-        print("Debug: Attempting to use AWS CLI profile 'togglebank'...")
-        session = boto3.Session(profile_name='togglebank', region_name=region)
+        print("Debug: Using AWS SSO profile 'marek'...")
+        session = boto3.Session(profile_name='marek', region_name=region)
         bedrock = session.client("bedrock-runtime")
         bedrock_agent = session.client("bedrock-agent-runtime")
-        # Test the credentials with a simple API call
-        import botocore
-        try:
-            # Try to get caller identity to test credentials
-            sts = session.client('sts')
-            sts.get_caller_identity()
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] in ['InvalidUserID.NotFound', 'AccessDenied']:
-                raise NoCredentialsError()
-            raise
-        print("✅ Successfully initialized AWS clients using 'togglebank' profile")
-        return bedrock, bedrock_agent
-    except ProfileNotFound:
-        print("⚠️  AWS profile 'togglebank' not found, trying default profile...")
-    except (NoCredentialsError, PartialCredentialsError) as e:
-        print(f"⚠️  AWS profile 'togglebank' has credential issues: {e}")
-    
-    # Try default AWS CLI profile
-    try:
-        print("Debug: Attempting to use default AWS CLI profile...")
-        session = boto3.Session(region_name=region)
-        bedrock = session.client("bedrock-runtime")
-        bedrock_agent = session.client("bedrock-agent-runtime")
-        # Test the credentials with a simple API call
-        import botocore
-        try:
-            # Try to get caller identity to test credentials
-            sts = session.client('sts')
-            sts.get_caller_identity()
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] in ['InvalidUserID.NotFound', 'AccessDenied']:
-                raise NoCredentialsError()
-            raise
-        print("✅ Successfully initialized AWS clients using default profile")
-        return bedrock, bedrock_agent
-    except (NoCredentialsError, PartialCredentialsError) as e:
-        print(f"⚠️  Default AWS profile has credential issues: {e}")
-    
-    # Try environment variables as fallback
-    try:
-        print("Debug: Attempting to use environment variables...")
-        if not (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY")):
-            raise NoCredentialsError()
         
-        bedrock = boto3.client("bedrock-runtime", region_name=region)
-        bedrock_agent = boto3.client("bedrock-agent-runtime", region_name=region)
         # Test the credentials with a simple API call
         import botocore
         try:
-            # Try to get caller identity to test credentials
-            sts = boto3.client('sts', region_name=region)
-            sts.get_caller_identity()
+            sts = session.client('sts')
+            identity = sts.get_caller_identity()
+            print(f"✅ Successfully authenticated as: {identity.get('Arn', 'Unknown')}")
+            return bedrock, bedrock_agent
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] in ['InvalidUserID.NotFound', 'AccessDenied']:
                 raise NoCredentialsError()
             raise
-        print("✅ Successfully initialized AWS clients using environment variables")
-        return bedrock, bedrock_agent
+            
+    except ProfileNotFound:
+        print("\n❌ AWS SSO PROFILE ERROR:")
+        print("═" * 50)
+        print("AWS profile 'marek' not found.")
+        print("\n🔧 SETUP REQUIRED:")
+        print("   aws configure sso")
+        print("   # Use profile name: marek")
+        print("   # Use your SSO start URL: https://d-9067a83728.awsapps.com/start/#")
+        print("   # Use region: us-east-1")
+        print("═" * 50)
+        raise Exception("AWS SSO profile 'marek' not configured")
+        
+    except TokenRetrievalError:
+        print("\n❌ AWS SSO SESSION EXPIRED:")
+        print("═" * 50)
+        print("Your AWS SSO session has expired.")
+        print("\n🔧 REFRESH REQUIRED:")
+        print("   aws sso login --profile marek")
+        print("   # This will open your browser to re-authenticate")
+        print("═" * 50)
+        raise Exception("AWS SSO session expired - please run: aws sso login --profile marek")
+        
     except (NoCredentialsError, PartialCredentialsError) as e:
-        print(f"⚠️  Environment variable credentials failed: {e}")
-    
-    # All credential sources failed
-    print("\n❌ CREDENTIAL SETUP ERROR:")
-    print("═" * 50)
-    print("No valid AWS credentials found. Please set up credentials using ONE of these methods:")
-    print("\n🏆 RECOMMENDED: AWS CLI Profile")
-    print("   aws configure --profile togglebank")
-    print("   # Then enter your AWS credentials")
-    print("\n🥈 ALTERNATIVE: Default AWS Profile") 
-    print("   aws configure")
-    print("   # Then enter your AWS credentials")
-    print("\n🥉 FALLBACK: Environment Variables")
-    print("   export AWS_ACCESS_KEY_ID='your-key'")
-    print("   export AWS_SECRET_ACCESS_KEY='your-secret'") 
-    print("   export AWS_DEFAULT_REGION='us-east-1'")
-    print("═" * 50)
-    
-    raise Exception("AWS credentials not configured. See setup instructions above.")
+        print("\n❌ AWS SSO CREDENTIAL ERROR:")
+        print("═" * 50)
+        print(f"AWS SSO credentials issue: {e}")
+        print("\n🔧 TROUBLESHOOTING:")
+        print("   1. aws sso login --profile marek")
+        print("   2. aws sts get-caller-identity --profile marek")
+        print("   3. Check your SSO permissions")
+        print("═" * 50)
+        raise Exception(f"AWS SSO credentials failed: {e}")
+        
+    except Exception as e:
+        print(f"\n❌ UNEXPECTED AWS ERROR: {e}")
+        print("═" * 50)
+        print("🔧 DEBUG STEPS:")
+        print("   1. aws sso login --profile marek")
+        print("   2. aws configure list --profile marek")
+        print("   3. Check your internet connection")
+        print("═" * 50)
+        raise Exception(f"Unexpected AWS error: {e}")
 
 # Initialize AWS clients with improved error handling
 try:
