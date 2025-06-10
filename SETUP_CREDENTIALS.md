@@ -30,7 +30,7 @@ aws configure sso
 
 **Use these settings:**
 - **SSO session name**: `marek-admin` (or your preference)
-- **SSO start URL**: `https://d-9067a83728.awsapps.com/start/#`
+- **SSO start URL**: `https://your-org.awsapps.com/start/#`
 - **SSO region**: `us-east-1`
 - **Default client Region**: `us-east-1`
 - **CLI default output format**: `json`
@@ -65,7 +65,7 @@ aws sts get-caller-identity --profile marek
 After setup, your applications will show:
 ```
 Debug: Using AWS SSO profile 'marek'...
-✅ Successfully authenticated as: arn:aws:sts::955116512041:assumed-role/Administrator/your-email
+✅ Successfully authenticated as: arn:aws:sts::123456789012:assumed-role/Administrator/your-email
 ```
 
 ## 🛠️ **Troubleshooting**

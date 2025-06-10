@@ -97,7 +97,7 @@ def initialize_aws_clients():
         print("\n🔧 SETUP REQUIRED:")
         print("   aws configure sso")
         print("   # Use profile name: marek")
-        print("   # Use your SSO start URL: https://d-9067a83728.awsapps.com/start/#")
+        print("   # Use your SSO start URL: https://your-org.awsapps.com/start/#")
         print("   # Use region: us-east-1")
         print("═" * 50)
         raise Exception("AWS SSO profile 'marek' not configured")
@@ -204,7 +204,7 @@ async def chat_endpoint(request: ChatRequest):
             KB_ID = cfg.model.get_custom('kb_id')
             GR_ID = cfg.model.get_custom('gr_id')
             GR_VER = str(cfg.model.get_custom('gr_version') or '1')
-            print(f"Debug: KB_ID: {KB_ID}, GR_ID: {GR_ID}, GR_VER: {GR_VER}")
+            print(f"Debug: KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
             custom_params = {
                 'kb_id': KB_ID,
                 'gr_id': GR_ID, 
@@ -221,9 +221,9 @@ async def chat_endpoint(request: ChatRequest):
             GR_ID = custom_params.get('gr_id') 
             GR_VER = str(custom_params.get('gr_version', '1'))
             custom_params['eval_freq'] = custom_params.get('eval_freq', '0.2')  # Reduce to 20%
-            print(f"Debug: Fallback - KB_ID: {KB_ID}, GR_ID: {GR_ID}, GR_VER: {GR_VER}")
+            print(f"Debug: Fallback - KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
         
-        print(f"Using KB_ID: {KB_ID}, GR_ID: {GR_ID}, GR_VER: {GR_VER}, custom_params: {custom_params}")
+        print(f"Using KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}, custom_params: {dict(custom_params, **{k: '***' if k in ['kb_id', 'gr_id'] and v else v for k, v in custom_params.items()})}")
         
         # Validate required parameters
         if not KB_ID:

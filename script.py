@@ -81,7 +81,7 @@ def initialize_aws_clients():
         print("\n🔧 SETUP REQUIRED:")
         print("   aws configure sso")
         print("   # Use profile name: marek")
-        print("   # Use your SSO start URL: https://d-9067a83728.awsapps.com/start/#")
+        print("   # Use your SSO start URL: https://your-org.awsapps.com/start/#")
         print("   # Use region: us-east-1")
         print("═" * 50)
         raise Exception("AWS SSO profile 'marek' not configured")

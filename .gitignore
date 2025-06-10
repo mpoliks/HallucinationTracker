@@ -188,6 +188,11 @@ auto_tester.log
 # AWS credentials
 .aws/
 
+# AWS CLI installers and bundles (large binary files)
+AWSCLIV2.pkg
+awscli-bundle.zip
+awscli-bundle/
+
 # IDE files
 .vscode/
 *.swp
