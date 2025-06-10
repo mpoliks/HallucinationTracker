@@ -74,7 +74,7 @@ def get_kb_passages(question: str, kb_id: str) -> str:
             },
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
-                    'numberOfResults': 25  # Expanded window for better accuracy
+                    'numberOfResults': 10  # Reduced from 25 for better performance
                 }
             }
         )

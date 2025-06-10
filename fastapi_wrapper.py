@@ -118,29 +118,33 @@ async def chat_endpoint(request: ChatRequest):
             actual_ai_config_key = request.aiConfigKey  # Fallback to request
             
         print(f"Debug: Using AI config key: {actual_ai_config_key}")
-        initial_cfg, _ = ai_client.config(actual_ai_config_key, context, default_cfg, {})
+        # Get AI config with user input as variable for this specific query
+        query_variables = {"userInput": request.userInput}
+        cfg, tracker = ai_client.config(actual_ai_config_key, context, default_cfg, query_variables)
         
         # Get configuration values from LaunchDarkly AI config custom parameters using get_custom(key)
         print(f"Debug: Getting custom parameters individually...")
         try:
-            KB_ID = initial_cfg.model.get_custom('kb_id')
-            GR_ID = initial_cfg.model.get_custom('gr_id')
-            GR_VER = str(initial_cfg.model.get_custom('gr_version') or '1')
+            KB_ID = cfg.model.get_custom('kb_id')
+            GR_ID = cfg.model.get_custom('gr_id')
+            GR_VER = str(cfg.model.get_custom('gr_version') or '1')
             print(f"Debug: KB_ID: {KB_ID}, GR_ID: {GR_ID}, GR_VER: {GR_VER}")
             custom_params = {
                 'kb_id': KB_ID,
                 'gr_id': GR_ID, 
-                'gr_version': GR_VER
+                'gr_version': GR_VER,
+                'eval_freq': cfg.model.get_custom('eval_freq') or '0.2'  # Reduce to 20% of requests
             }
         except Exception as e:
             print(f"Debug: get_custom(key) failed: {e}")
             # Fallback to old method
-            config_dict = initial_cfg.to_dict()
+            config_dict = cfg.to_dict()
             model_config = config_dict.get('model', {})
             custom_params = model_config.get('custom') or {}
             KB_ID = custom_params.get('kb_id')
             GR_ID = custom_params.get('gr_id') 
             GR_VER = str(custom_params.get('gr_version', '1'))
+            custom_params['eval_freq'] = custom_params.get('eval_freq', '0.2')  # Reduce to 20%
             print(f"Debug: Fallback - KB_ID: {KB_ID}, GR_ID: {GR_ID}, GR_VER: {GR_VER}")
         
         print(f"Using KB_ID: {KB_ID}, GR_ID: {GR_ID}, GR_VER: {GR_VER}, custom_params: {custom_params}")
@@ -161,10 +165,6 @@ async def chat_endpoint(request: ChatRequest):
                 error="Missing gr_id configuration"
             )
 
-        # Now get AI config with user input as variable for this specific query
-        query_variables = {"userInput": request.userInput}
-        cfg, tracker = ai_client.config(actual_ai_config_key, context, default_cfg, query_variables)
-        
         if not cfg.enabled:
             return ChatResponse(
                 response="I'm sorry, the service is currently disabled.",
@@ -292,32 +292,29 @@ async def chat_endpoint(request: ChatRequest):
         # Extract response text
         reply_txt = raw["output"]["message"]["content"][0]["text"]
         
-        # Perform factual accuracy check in a non-blocking way
-        score, judge_model, judge_input_tokens, judge_output_tokens = await asyncio.to_thread(
-            check_factual_accuracy,
-            source_passages=passages,
-            response_text=reply_txt,
-            generator_model_id=model_id,
-            custom_params=custom_params,
-            context=context
-        )
-
-        if score is not None:
-            metrics["factual_accuracy_score"] = score
-        if judge_model is not None:
-            metrics["judge_model_name"] = judge_model
-        if judge_input_tokens is not None:
-            metrics["judge_input_tokens"] = judge_input_tokens
-        if judge_output_tokens is not None:
-            metrics["judge_output_tokens"] = judge_output_tokens
-
-        logging.debug(f"Final metrics object after factual check: {json.dumps(metrics, indent=2)}")
+        # Start factual accuracy check asynchronously (fire-and-forget) to not block response
+        async def run_factual_check():
+            try:
+                score, judge_model, judge_input_tokens, judge_output_tokens = await asyncio.to_thread(
+                    check_factual_accuracy,
+                    source_passages=passages,
+                    response_text=reply_txt,
+                    generator_model_id=model_id,
+                    custom_params=custom_params,
+                    context=context
+                )
+                logging.info(f"Factual accuracy check completed: {score}")
+            except Exception as e:
+                logging.error(f"Factual accuracy check failed: {e}")
+        
+        # Run factual check in background without awaiting
+        asyncio.create_task(run_factual_check())
         
         # Track success
         if tracker:
             tracker.track_success()
             
-        # Return response with metrics
+        # Return response immediately without waiting for factual accuracy
         return ChatResponse(
             response=reply_txt,
             modelName=model_id,
