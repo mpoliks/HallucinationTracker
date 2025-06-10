@@ -197,4 +197,10 @@ auto_tester.log
 # Testing outputs
 test_output_*
 coverage_* 
+# Next.js build artifacts
+.next/
+out/
+build/
+
+# Node.js
 node_modules
