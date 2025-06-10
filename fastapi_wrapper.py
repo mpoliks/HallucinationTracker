@@ -61,8 +61,111 @@ ldclient.set_config(Config(LD_SDK))
 ld = ldclient.get()
 ai_client = LDAIClient(ld)
 
-bedrock = boto3.client("bedrock-runtime", region_name=REGION)
-bedrock_agent = boto3.client("bedrock-agent-runtime", region_name=REGION)
+# AWS clients with improved credential handling
+def initialize_aws_clients():
+    """
+    Initialize AWS clients with multiple credential sources in order of preference:
+    1. AWS CLI profile (togglebank)
+    2. Default AWS CLI profile  
+    3. Environment variables
+    4. IAM roles (if running on AWS)
+    """
+    import boto3
+    from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound
+    
+    region = os.getenv("AWS_REGION", "us-east-1")
+    
+    # Try AWS CLI profile first (recommended approach)
+    try:
+        print("Debug: Attempting to use AWS CLI profile 'togglebank'...")
+        session = boto3.Session(profile_name='togglebank', region_name=region)
+        bedrock = session.client("bedrock-runtime")
+        bedrock_agent = session.client("bedrock-agent-runtime")
+        # Test the credentials with a simple API call
+        import botocore
+        try:
+            # Try to get caller identity to test credentials
+            sts = session.client('sts')
+            sts.get_caller_identity()
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] in ['InvalidUserID.NotFound', 'AccessDenied']:
+                raise NoCredentialsError()
+            raise
+        print("✅ Successfully initialized AWS clients using 'togglebank' profile")
+        return bedrock, bedrock_agent
+    except ProfileNotFound:
+        print("⚠️  AWS profile 'togglebank' not found, trying default profile...")
+    except (NoCredentialsError, PartialCredentialsError) as e:
+        print(f"⚠️  AWS profile 'togglebank' has credential issues: {e}")
+    
+    # Try default AWS CLI profile
+    try:
+        print("Debug: Attempting to use default AWS CLI profile...")
+        session = boto3.Session(region_name=region)
+        bedrock = session.client("bedrock-runtime")
+        bedrock_agent = session.client("bedrock-agent-runtime")
+        # Test the credentials with a simple API call
+        import botocore
+        try:
+            # Try to get caller identity to test credentials
+            sts = session.client('sts')
+            sts.get_caller_identity()
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] in ['InvalidUserID.NotFound', 'AccessDenied']:
+                raise NoCredentialsError()
+            raise
+        print("✅ Successfully initialized AWS clients using default profile")
+        return bedrock, bedrock_agent
+    except (NoCredentialsError, PartialCredentialsError) as e:
+        print(f"⚠️  Default AWS profile has credential issues: {e}")
+    
+    # Try environment variables as fallback
+    try:
+        print("Debug: Attempting to use environment variables...")
+        if not (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY")):
+            raise NoCredentialsError()
+        
+        bedrock = boto3.client("bedrock-runtime", region_name=region)
+        bedrock_agent = boto3.client("bedrock-agent-runtime", region_name=region)
+        # Test the credentials with a simple API call
+        import botocore
+        try:
+            # Try to get caller identity to test credentials
+            sts = boto3.client('sts', region_name=region)
+            sts.get_caller_identity()
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] in ['InvalidUserID.NotFound', 'AccessDenied']:
+                raise NoCredentialsError()
+            raise
+        print("✅ Successfully initialized AWS clients using environment variables")
+        return bedrock, bedrock_agent
+    except (NoCredentialsError, PartialCredentialsError) as e:
+        print(f"⚠️  Environment variable credentials failed: {e}")
+    
+    # All credential sources failed
+    print("\n❌ CREDENTIAL SETUP ERROR:")
+    print("═" * 50)
+    print("No valid AWS credentials found. Please set up credentials using ONE of these methods:")
+    print("\n🏆 RECOMMENDED: AWS CLI Profile")
+    print("   aws configure --profile togglebank")
+    print("   # Then enter your AWS credentials")
+    print("\n🥈 ALTERNATIVE: Default AWS Profile") 
+    print("   aws configure")
+    print("   # Then enter your AWS credentials")
+    print("\n🥉 FALLBACK: Environment Variables")
+    print("   export AWS_ACCESS_KEY_ID='your-key'")
+    print("   export AWS_SECRET_ACCESS_KEY='your-secret'") 
+    print("   export AWS_DEFAULT_REGION='us-east-1'")
+    print("═" * 50)
+    
+    raise Exception("AWS credentials not configured. See setup instructions above.")
+
+# Initialize AWS clients with improved error handling
+try:
+    bedrock, bedrock_agent = initialize_aws_clients()
+except Exception as e:
+    print(f"Failed to initialize AWS clients: {e}")
+    sys.exit(1)
 
 # Pydantic models for API requests/responses
 class ChatRequest(BaseModel):
