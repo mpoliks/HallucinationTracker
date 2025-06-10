@@ -292,29 +292,33 @@ async def chat_endpoint(request: ChatRequest):
         # Extract response text
         reply_txt = raw["output"]["message"]["content"][0]["text"]
         
-        # Start factual accuracy check asynchronously (fire-and-forget) to not block response
-        async def run_factual_check():
-            try:
-                score, judge_model, judge_input_tokens, judge_output_tokens = await asyncio.to_thread(
-                    check_factual_accuracy,
-                    source_passages=passages,
-                    response_text=reply_txt,
-                    generator_model_id=model_id,
-                    custom_params=custom_params,
-                    context=context
-                )
-                logging.info(f"Factual accuracy check completed: {score}")
-            except Exception as e:
-                logging.error(f"Factual accuracy check failed: {e}")
-        
-        # Run factual check in background without awaiting
-        asyncio.create_task(run_factual_check())
+        # Perform factual accuracy check and include in response metrics
+        factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = await asyncio.to_thread(
+            check_factual_accuracy,
+            source_passages=passages,
+            response_text=reply_txt,
+            generator_model_id=model_id,
+            custom_params=custom_params,
+            context=context
+        )
+
+        # Add factual accuracy metrics to the response
+        if factual_accuracy is not None:
+            metrics["factual_accuracy_score"] = factual_accuracy
+        if judge_model_name is not None:
+            metrics["judge_model_name"] = judge_model_name
+        if judge_input_tokens is not None:
+            metrics["judge_input_tokens"] = judge_input_tokens
+        if judge_output_tokens is not None:
+            metrics["judge_output_tokens"] = judge_output_tokens
+
+        logging.info(f"Final metrics object after factual check: {json.dumps(metrics, indent=2)}")
         
         # Track success
         if tracker:
             tracker.track_success()
             
-        # Return response immediately without waiting for factual accuracy
+        # Return response with complete metrics including factual accuracy
         return ChatResponse(
             response=reply_txt,
             modelName=model_id,
