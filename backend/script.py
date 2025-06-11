@@ -17,6 +17,7 @@ from ldclient.config import Config
 from ldclient import Context
 from ldai.client import LDAIClient, AIConfig, ModelConfig
 from ldai.tracker import FeedbackKind
+from user_service import get_current_user_context, get_user_service
 
 # ── setup & helpers ───────────────────────────────────────────────────────────
 dotenv.load_dotenv()
@@ -136,9 +137,9 @@ def print_box(title: str, text: str) -> None:
         print("│ " + l.ljust(width-2) + " │")
     print("└" + "─"*width + "┘")
 
-def get_kb_passages(question: str, kb_id: str) -> str:
+def get_kb_passages(question: str, kb_id: str, user_context: Context = None) -> str:
     """
-    Query AWS Bedrock Knowledge Base using vector search
+    Query AWS Bedrock Knowledge Base using vector search with customer-specific filtering
     """
     try:
         response = bedrock_agent.retrieve(
@@ -148,21 +149,58 @@ def get_kb_passages(question: str, kb_id: str) -> str:
             },
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
-                    'numberOfResults': 10  # Reduced from 25 for better performance
+                    'numberOfResults': 15  # Get more results for better filtering
                 }
             }
         )
         
         passages = []
+        filtered_passages = []
+        
+        # Extract all passages first
         for result in response.get('retrievalResults', []):
             content = result.get('content', {}).get('text', '')
             if content:
                 passages.append(content)
         
-        if passages:
-            return '\n\n---\n\n'.join(passages)
+        # Filter passages based on user context
+        if user_context:
+            current_user_name = user_context.name
+            # Access LaunchDarkly context attributes properly
+            context_dict = user_context.to_dict()
+            current_user_tier = context_dict.get("tier", "").lower() if "tier" in context_dict else ""
+            
+            for passage in passages:
+                passage_lower = passage.lower()
+                
+                # Skip passages that contain other customer profiles
+                if "name:" in passage_lower and current_user_name.lower() not in passage_lower:
+                    # This passage contains another customer's profile, skip it
+                    logging.info(f"Filtered out other customer profile: {passage[:50]}...")
+                    continue
+                
+                # For tier-specific information, only include relevant tiers
+                if any(tier in passage_lower for tier in ["diamond", "platinum", "gold", "silver"]):
+                    # Check if passage mentions current user's tier or is generic advice
+                    if (current_user_tier in passage_lower or 
+                        "tiers receive" in passage_lower or  # Generic tier info
+                        not any(other_tier in passage_lower for other_tier in 
+                               ["diamond", "platinum", "gold", "silver"] if other_tier != current_user_tier)):
+                        filtered_passages.append(passage)
+                    else:
+                        logging.info(f"Filtered out tier-specific info not relevant to {current_user_tier}: {passage[:50]}...")
+                        continue
+                else:
+                    # Generic information, include it
+                    filtered_passages.append(passage)
         else:
-            return "No relevant passages found."
+            # No user context, return all passages
+            filtered_passages = passages
+        
+        if filtered_passages:
+            return '\n\n---\n\n'.join(filtered_passages)
+        else:
+            return "No relevant passages found for your account."
             
     except botocore.exceptions.ClientError as e:
         logging.error("Knowledge Base retrieval error: %s", e)
@@ -177,14 +215,73 @@ def extract_system_messages(msgs) -> List[Dict[str, str]]:
     """Extract system messages for the system parameter"""
     return [{"text": m.content} for m in msgs if m.role == "system"]
 
+def validate_response_for_user(response_text: str, user_context: Context) -> str:
+    """
+    Validates that the response doesn't mention benefits for incorrect customer tiers.
+    Corrects or warns about tier mismatches.
+    """
+    if not user_context:
+        return response_text
+    
+    context_dict = user_context.to_dict()
+    user_tier = context_dict.get("tier", "").lower() if "tier" in context_dict else ""
+    user_name = user_context.name
+    
+    # Check for mentions of wrong tier benefits
+    response_lower = response_text.lower()
+    wrong_tiers = []
+    
+    tier_map = {
+        "diamond": "Diamond",
+        "platinum": "Platinum", 
+        "gold": "Gold",
+        "silver": "Silver"
+    }
+    
+    for tier_key, tier_name in tier_map.items():
+        if tier_key != user_tier and f"{tier_key} tier" in response_lower:
+            wrong_tiers.append(tier_name)
+    
+    if wrong_tiers:
+        # Add a correction notice
+        correction = f"\n\n⚠️ Note: This response mentioned {', '.join(wrong_tiers)} tier benefits, but you have a {user_tier.title()} tier account. Some information may not apply to your account level."
+        return response_text + correction
+    
+    return response_text
+
 def build_guardrail_prompt(passages: str, user_input: str, context: dict = None) -> str:
     """
-    Builds the prompt for the guardrail, including passages and user input.
-    Optionally includes user context if provided.
+    Builds an enhanced prompt for the guardrail with explicit user context and instructions.
+    Ensures responses are personalized and accurate for the current customer.
     """
     if context:
-        context_str = "\n".join([f"{key}: {value}" for key, value in context.items()])
-        return f"User Context:\n{context_str}\n\nPassages:\n{passages}\n\nUser Question: {user_input}"
+        # Extract key user information
+        user_name = context.get('name', 'Customer')
+        user_tier = context.get('tier', 'Unknown')
+        user_location = context.get('location', 'Unknown')
+        
+        # Build enhanced prompt with explicit instructions
+        prompt = f"""CURRENT CUSTOMER PROFILE:
+- Name: {user_name}
+- Account Tier: {user_tier}
+- Location: {user_location}
+
+INSTRUCTIONS:
+1. You are responding specifically to {user_name}, a {user_tier} tier customer
+2. Only provide information that applies to {user_tier} tier customers or general policies
+3. Do NOT provide information about benefits for other tiers (Diamond, Platinum, Gold, Silver) unless it applies to {user_tier} tier
+4. If the knowledge base contains information about other customers, ignore that information
+5. Base your response only on the passages below that are relevant to {user_name} and {user_tier} tier customers
+6. If you don't have specific information for {user_tier} tier, clearly state the limitations
+
+KNOWLEDGE BASE PASSAGES:
+{passages}
+
+CUSTOMER QUESTION: {user_input}
+
+Remember: Respond as if you are speaking directly to {user_name}, a {user_tier} tier customer. Only use information that is relevant to their account tier."""
+        
+        return prompt
     else:
         return f"Passages:\n{passages}\n\nUser Question: {user_input}"
 
@@ -305,17 +402,14 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
 
 # ── main loop ────────────────────────────────────────────────────────────────
 def main() -> None:
-    # Generate unique user for fresh experiment exposure each time
-    unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
+    # Get user context from the dynamic user service
+    context = get_current_user_context()
+    user_service = get_user_service()
+    current_profile = user_service.get_current_user_profile()
     
-    # Set up Catherine Liu's profile for context variables (from customer_024.txt)
-    context = Context.builder(unique_user_key).kind("user").name("Catherine Liu").set(
-        "location", "Boston, MA"
-    ).set(
-        "tier", "Silver"
-    ).set(
-        "userName", "Catherine Liu"
-    ).build()
+    print(f"\n👤 Current User: {current_profile['name']} ({current_profile['tier']} tier)")
+    print(f"📍 Location: {current_profile['location']}")
+    print("💡 Demo Tip: You can switch users by modifying user_service.py or using the API endpoints\n")
     
     # Default config - will be overridden by LaunchDarkly AI configs
     default_cfg = AIConfig(
@@ -352,15 +446,32 @@ def main() -> None:
     # Get model name from the initial config for display
     model_id = initial_cfg.model.name if initial_cfg.model else "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
-    print_box("READY", f"User: Catherine Liu (Silver Tier)\nCity: Boston, MA | Average Balance: <1k\nModel: {model_id}\nGuardrail: {GR_ID} (v{GR_VER})\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
+    print_box("READY", f"User: {current_profile['name']} ({current_profile['tier']} Tier)\nCity: {current_profile['location']} | Average Balance: {current_profile.get('average_balance', 'Unknown')}\nModel: {model_id}\nGuardrail: {GR_ID} (v{GR_VER})\nKnowledge Base: {KB_ID}\nType 'exit' to quit.")
 
     # Welcome message
     print("\n🤖  Hi, this is Bot from ToggleBank, how can I help you?")
+    print("💡  Type 'switch user' to change demo user, or 'exit' to quit.")
 
     while True:
         user = input("\n🧑  You: ").strip()
         if user.lower() in {"exit", "quit"}:
             break
+        
+        # Handle user switching command
+        if user.lower() == "switch user":
+            available_users = user_service.get_available_users()
+            print("\n📋  Available demo users:")
+            for key, name in available_users.items():
+                print(f"   • {key}: {name}")
+            
+            new_user = input("\n🔄  Enter user key: ").strip()
+            if user_service.set_current_user(new_user):
+                new_profile = user_service.get_current_user_profile()
+                context = get_current_user_context()  # Refresh context
+                print(f"✅  Switched to: {new_profile['name']} ({new_profile['tier']} tier)")
+            else:
+                print(f"❌  User '{new_user}' not found")
+            continue
 
         # Get AI config with user input as variable for this specific query
         query_variables = {"userInput": user}
@@ -371,16 +482,26 @@ def main() -> None:
 
         # Extract user context from LaunchDarkly context for personalized search
         user_context_name = context.name  # Get from LaunchDarkly context
+        context_dict = context.to_dict()
+        user_tier = context_dict.get("tier", "")
         
-        # Enhance RAG query with user context for better retrieval
+        # Enhanced RAG query strategy with user context and tier information
         if any(word in user.lower() for word in ["my", "i", "me", "mine"]):
-            # Personal queries should include the user's name for better RAG results
-            enhanced_query = f"{user_context_name} {user}"
+            # Personal queries should include the user's name and tier for better RAG results
+            enhanced_query = f"{user_context_name} {user_tier} tier {user}"
         else:
-            # Non-personal queries don't need user context
-            enhanced_query = user
+            # Non-personal queries include tier for relevant policy information
+            enhanced_query = f"{user_tier} tier {user}"
             
-        passages = get_kb_passages(enhanced_query, KB_ID)
+        passages = get_kb_passages(enhanced_query, KB_ID, context)
+        
+        # Validate that we have relevant passages for this user
+        if "No relevant passages found" in passages:
+            # Try a broader search without user context
+            fallback_query = user
+            passages = get_kb_passages(fallback_query, KB_ID, context)
+            if "No relevant passages found" in passages:
+                passages = "I don't have specific information about that topic in my knowledge base. Please contact ToggleSupport via chat or phone for personalized assistance."
         
         # Show both original and enhanced query in debug
         query_info = f"Original Query: {user}\nEnhanced Query: {enhanced_query}" if enhanced_query != user else f"Query: {user}"
@@ -503,6 +624,9 @@ def main() -> None:
         else:
             # Fallback: extract from raw response structure
             reply_txt = raw["output"]["message"]["content"][0]["text"]
+            
+        # Validate response for user-specific accuracy
+        reply_txt = validate_response_for_user(reply_txt, context)
             
         latency   = "N/A"  # Handled by SDK tracking
         

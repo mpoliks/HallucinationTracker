@@ -27,8 +27,10 @@ from script import (
     build_guardrail_prompt, 
     map_messages, 
     extract_system_messages,
-    check_factual_accuracy
+    check_factual_accuracy,
+    validate_response_for_user
 )
+from user_service import get_current_user_context, get_user_service
 
 # Load environment
 dotenv.load_dotenv()
@@ -156,17 +158,10 @@ class FeedbackRequest(BaseModel):
     feedback: str
     aiConfigKey: str
 
-# Global context - matches your Catherine Liu example with unique user key like script.py
+# User context now comes from the user service - no more hardcoding!
 def get_user_context():
-    import uuid
-    unique_user_key = f"user-{uuid.uuid4().hex[:8]}"
-    return Context.builder(unique_user_key).kind("user").name("Catherine Liu").set(
-        "location", "Boston, MA"
-    ).set(
-        "tier", "Silver"
-    ).set(
-        "userName", "Catherine Liu"
-    ).build()
+    """Get user context from the dynamic user service."""
+    return get_current_user_context()
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
@@ -253,14 +248,27 @@ async def chat_endpoint(request: ChatRequest):
         print(f"Debug: Using model from LaunchDarkly config: {model_id}")
         history = list(cfg.messages) if cfg.messages else []
 
-        # Enhanced RAG query (same logic as your script)
+        # Enhanced RAG query strategy with user context and tier information
         user_context_name = context.name
+        context_dict = context.to_dict()
+        user_tier = context_dict.get("tier", "")
+        
         if any(word in request.userInput.lower() for word in ["my", "i", "me", "mine"]):
-            enhanced_query = f"{user_context_name} {request.userInput}"
+            # Personal queries should include the user's name and tier for better RAG results
+            enhanced_query = f"{user_context_name} {user_tier} tier {request.userInput}"
         else:
-            enhanced_query = request.userInput
+            # Non-personal queries include tier for relevant policy information
+            enhanced_query = f"{user_tier} tier {request.userInput}"
             
-        passages = get_kb_passages(enhanced_query, KB_ID)
+        passages = get_kb_passages(enhanced_query, KB_ID, context)
+        
+        # Validate that we have relevant passages for this user
+        if "No relevant passages found" in passages:
+            # Try a broader search without user context
+            fallback_query = request.userInput
+            passages = get_kb_passages(fallback_query, KB_ID, context)
+            if "No relevant passages found" in passages:
+                passages = "I don't have specific information about that topic in my knowledge base. Please contact ToggleSupport via chat or phone for personalized assistance."
         context_dict = context.to_dict()
         prompt = build_guardrail_prompt(passages, request.userInput, context_dict)
 
@@ -368,6 +376,9 @@ async def chat_endpoint(request: ChatRequest):
         # Extract response text
         reply_txt = raw["output"]["message"]["content"][0]["text"]
         
+        # Validate response for user-specific accuracy
+        reply_txt = validate_response_for_user(reply_txt, context)
+        
         # Perform factual accuracy check and include in response metrics
         factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = await asyncio.to_thread(
             check_factual_accuracy,
@@ -448,6 +459,53 @@ async def feedback_endpoint(request: FeedbackRequest):
         
     except Exception as e:
         logging.error(f"Error in feedback endpoint: {e}")
+        return {"error": str(e)}
+
+@app.post("/api/switch-user")
+async def switch_user(user_key: str):
+    """
+    Switch to a different demo user for testing purposes.
+    In production, this would be handled by authentication.
+    
+    Args:
+        user_key: User identifier (e.g., "catherine_liu", "ingrid_zhou", "demo_user")
+    """
+    try:
+        user_service = get_user_service()
+        success = user_service.set_current_user(user_key)
+        
+        if success:
+            current_profile = user_service.get_current_user_profile()
+            return {
+                "status": "success", 
+                "message": f"Switched to user: {current_profile['name']}",
+                "user_profile": current_profile
+            }
+        else:
+            available_users = user_service.get_available_users()
+            return {
+                "status": "error",
+                "message": f"User '{user_key}' not found",
+                "available_users": available_users
+            }
+    except Exception as e:
+        logging.error(f"Error switching user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/current-user")
+async def get_current_user():
+    """Get information about the current demo user."""
+    try:
+        user_service = get_user_service()
+        profile = user_service.get_current_user_profile()
+        available_users = user_service.get_available_users()
+        
+        return {
+            "current_user": profile,
+            "available_users": available_users
+        }
+    except Exception as e:
+        logging.error(f"Error getting current user: {e}")
         return {"error": str(e)}
 
 @app.get("/health")
