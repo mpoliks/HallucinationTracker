@@ -17,7 +17,7 @@ from ldclient.config import Config
 from ldclient import Context
 from ldai.client import LDAIClient, AIConfig, ModelConfig
 from ldai.tracker import FeedbackKind
-from user_service import get_current_user_context, get_user_service
+from .user_service import get_current_user_context, get_user_service
 
 # ── setup & helpers ───────────────────────────────────────────────────────────
 dotenv.load_dotenv()
@@ -36,16 +36,7 @@ REGION   = os.getenv("AWS_REGION", "us-east-1")
 if not (LD_SDK and LD_KEY and LD_JUDGE_KEY):
     sys.exit("✖  Missing required env vars – check your .env file")
 
-# LD initialisation
-ldclient.set_config(Config(LD_SDK))
-ld = ldclient.get()
-
-# Check for successful initialization. is_initialized() is True once the client
-# has successfully connected, or has received a valid initial data set.
-if not ld.is_initialized():
-    sys.exit("✖  LaunchDarkly SDK failed to initialize. Check SDK key and network.")
-
-ai_client = LDAIClient(ld)
+# LaunchDarkly initialization removed - clients will be passed as parameters
 
 # AWS clients with SSO authentication
 def initialize_aws_clients():
@@ -118,13 +109,6 @@ def initialize_aws_clients():
         print("═" * 50)
         raise Exception(f"Unexpected AWS error: {e}")
 
-# Initialize AWS clients with improved error handling
-try:
-    bedrock, bedrock_agent = initialize_aws_clients()
-except Exception as e:
-    print(f"Failed to initialize AWS clients: {e}")
-    sys.exit(1)
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
 
 def print_box(title: str, text: str) -> None:
@@ -137,7 +121,7 @@ def print_box(title: str, text: str) -> None:
         print("│ " + l.ljust(width-2) + " │")
     print("└" + "─"*width + "┘")
 
-def get_kb_passages(question: str, kb_id: str, user_context: Context = None) -> str:
+def get_kb_passages(question: str, kb_id: str, bedrock_agent, user_context: Context = None) -> str:
     """
     Query AWS Bedrock Knowledge Base using vector search with customer-specific filtering
     """
@@ -309,7 +293,7 @@ MODEL_ID_TO_NAME_MAP = {
     "us.anthropic.claude-sonnet-4-20250514-v1:0": "Claude Sonnet"
 }
 
-def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context) -> tuple[Union[float, None], Union[str, None], Union[int, None], Union[int, None]]:
+def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context, ai_client: LDAIClient, bedrock) -> tuple[Union[float, None], Union[str, None], Union[int, None], Union[int, None]]:
     """
     Check factual accuracy by extracting and comparing key facts
     Returns a tuple containing: (score, judge_model_name, judge_input_tokens, judge_output_tokens)
@@ -401,7 +385,7 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
         return 0.0, None, None, None
 
 # ── main loop ────────────────────────────────────────────────────────────────
-def main() -> None:
+def main(ai_client: LDAIClient, bedrock, bedrock_agent) -> None:
     # Get user context from the dynamic user service
     context = get_current_user_context()
     user_service = get_user_service()
@@ -493,13 +477,13 @@ def main() -> None:
             # Non-personal queries include tier for relevant policy information
             enhanced_query = f"{user_tier} tier {user}"
             
-        passages = get_kb_passages(enhanced_query, KB_ID, context)
+        passages = get_kb_passages(enhanced_query, KB_ID, bedrock_agent, context)
         
         # Validate that we have relevant passages for this user
         if "No relevant passages found" in passages:
             # Try a broader search without user context
             fallback_query = user
-            passages = get_kb_passages(fallback_query, KB_ID, context)
+            passages = get_kb_passages(fallback_query, KB_ID, bedrock_agent, context)
             if "No relevant passages found" in passages:
                 passages = "I don't have specific information about that topic in my knowledge base. Please contact ToggleSupport via chat or phone for personalized assistance."
         
@@ -637,7 +621,7 @@ def main() -> None:
         print_box("ASSISTANT", reply_txt)
 
         # ── factual accuracy check ────────────────────────────────────────────
-        factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context)
+        factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context, ai_client, bedrock)
         if factual_accuracy is not None:
             logging.info(f"Accuracy score: {factual_accuracy:.3f}")
 
@@ -708,4 +692,24 @@ def main() -> None:
     print("✓  Finished. Goodbye!")
 
 if __name__ == "__main__":
-    main()
+    # Initialize clients for direct script execution
+    try:
+        bedrock, bedrock_agent = initialize_aws_clients()
+    except Exception as e:
+        print(f"Failed to initialize AWS clients: {e}")
+        sys.exit(1)
+    
+    # Initialize LaunchDarkly clients
+    ldclient.set_config(Config(LD_SDK))
+    ld = ldclient.get()
+    
+    # Check for successful initialization
+    if not ld.is_initialized():
+        print("Closing LaunchDarkly client..")
+        ld.close()
+        sys.exit("✖  LaunchDarkly SDK failed to initialize. Check SDK key and network.")
+    
+    ai_client = LDAIClient(ld)
+    
+    # Run main with initialized clients
+    main(ai_client, bedrock, bedrock_agent)

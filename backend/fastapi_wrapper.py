@@ -3,6 +3,7 @@
 FastAPI wrapper for the existing Python chatbot to work with ToggleBank frontend
 """
 import os
+import sys
 import json
 import asyncio
 import logging
@@ -22,7 +23,7 @@ from ldai.client import LDAIClient, AIConfig, ModelConfig
 from ldai.tracker import FeedbackKind
 
 # Import functions from your existing script
-from script import (
+from .script import (
     get_kb_passages, 
     build_guardrail_prompt, 
     map_messages, 
@@ -30,7 +31,7 @@ from script import (
     check_factual_accuracy,
     validate_response_for_user
 )
-from user_service import get_current_user_context, get_user_service
+from .user_service import get_current_user_context, get_user_service
 
 # Load environment
 dotenv.load_dotenv()
@@ -260,13 +261,13 @@ async def chat_endpoint(request: ChatRequest):
             # Non-personal queries include tier for relevant policy information
             enhanced_query = f"{user_tier} tier {request.userInput}"
             
-        passages = get_kb_passages(enhanced_query, KB_ID, context)
+        passages = get_kb_passages(enhanced_query, KB_ID, bedrock_agent, context)
         
         # Validate that we have relevant passages for this user
         if "No relevant passages found" in passages:
             # Try a broader search without user context
             fallback_query = request.userInput
-            passages = get_kb_passages(fallback_query, KB_ID, context)
+            passages = get_kb_passages(fallback_query, KB_ID, bedrock_agent, context)
             if "No relevant passages found" in passages:
                 passages = "I don't have specific information about that topic in my knowledge base. Please contact ToggleSupport via chat or phone for personalized assistance."
         context_dict = context.to_dict()
@@ -386,7 +387,9 @@ async def chat_endpoint(request: ChatRequest):
             response_text=reply_txt,
             generator_model_id=model_id,
             custom_params=custom_params,
-            context=context
+            context=context,
+            ai_client=ai_client,
+            bedrock=bedrock
         )
 
         # Add factual accuracy metrics to the response
