@@ -61,6 +61,11 @@ export interface ChatBotAIApiResponseInterface {
 		judge_model_name?: string;
 		judge_input_tokens?: number;
 		judge_output_tokens?: number;
+		// Detailed judge breakdown components
+		judge_reasoning?: string;
+		factual_claims?: string[];
+		accurate_claims?: string[];
+		inaccurate_claims?: string[];
 	};
 }
 

@@ -502,6 +502,58 @@ function ChatBotInterface({
 															<span className="font-mono text-xs">{lastMetrics.guardrail_id}</span>
 														</div>
 													)}
+													
+													{/* Judge Breakdown Details */}
+													{lastMetrics.factual_claims && lastMetrics.factual_claims.length > 0 && (
+														<div className="border-t pt-2 mt-2">
+															<div className="text-xs font-semibold text-gray-700 mb-1">📋 Judge Analysis:</div>
+															<details className="cursor-pointer">
+																<summary className="text-xs text-blue-600 hover:text-blue-800">
+																	View Detailed Breakdown
+																</summary>
+																<div className="mt-2 space-y-2 text-xs">
+																	{lastMetrics.factual_claims && (
+																		<div>
+																			<div className="font-semibold text-gray-600">Claims Identified:</div>
+																			<ul className="list-disc ml-4 text-gray-500">
+																				{lastMetrics.factual_claims.map((claim: string, idx: number) => (
+																					<li key={idx}>{claim}</li>
+																				))}
+																			</ul>
+																		</div>
+																	)}
+																	{lastMetrics.accurate_claims && lastMetrics.accurate_claims.length > 0 && (
+																		<div>
+																			<div className="font-semibold text-green-600">✅ Accurate Claims:</div>
+																			<ul className="list-disc ml-4 text-green-500">
+																				{lastMetrics.accurate_claims.map((claim: string, idx: number) => (
+																					<li key={idx}>{claim}</li>
+																				))}
+																			</ul>
+																		</div>
+																	)}
+																	{lastMetrics.inaccurate_claims && lastMetrics.inaccurate_claims.length > 0 && (
+																		<div>
+																			<div className="font-semibold text-red-600">❌ Inaccurate Claims:</div>
+																			<ul className="list-disc ml-4 text-red-500">
+																				{lastMetrics.inaccurate_claims.map((claim: string, idx: number) => (
+																					<li key={idx}>{claim}</li>
+																				))}
+																			</ul>
+																		</div>
+																	)}
+																	{lastMetrics.judge_reasoning && (
+																		<div>
+																			<div className="font-semibold text-gray-600">🧠 Judge Reasoning:</div>
+																			<div className="text-gray-500 bg-gray-100 p-2 rounded text-xs mt-1">
+																				{lastMetrics.judge_reasoning}
+																			</div>
+																		</div>
+																	)}
+																</div>
+															</details>
+														</div>
+													)}
 												</div>
 											)}
 										</div>

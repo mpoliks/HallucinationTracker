@@ -17,7 +17,7 @@ from ldclient.config import Config
 from ldclient import Context
 from ldai.client import LDAIClient, AIConfig, ModelConfig
 from ldai.tracker import FeedbackKind
-from .user_service import get_current_user_context, get_user_service
+from user_service import get_current_user_context, get_user_service
 
 # ── setup & helpers ───────────────────────────────────────────────────────────
 dotenv.load_dotenv()
@@ -293,7 +293,7 @@ MODEL_ID_TO_NAME_MAP = {
     "us.anthropic.claude-sonnet-4-20250514-v1:0": "Claude Sonnet"
 }
 
-def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context, ai_client: LDAIClient, bedrock) -> tuple[Union[float, None], Union[str, None], Union[int, None], Union[int, None]]:
+def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context, ai_client: LDAIClient, bedrock) -> dict:
     """
     Check factual accuracy by extracting and comparing key facts
     Returns a tuple containing: (score, judge_model_name, judge_input_tokens, judge_output_tokens)
@@ -361,28 +361,121 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
         judge_input_tokens = usage.get("inputTokens")
         judge_output_tokens = usage.get("outputTokens")
         
+        # Debug: Log the raw judge response
+        logging.info(f"Raw judge response: {fact_result}")
+        
         # Process judge response
         
         # Parse JSON response
         import json
         try:
-            fact_data = json.loads(fact_result)
+            # Clean up the response - remove markdown code blocks if present
+            clean_result = fact_result.strip()
+            if clean_result.startswith("```json"):
+                clean_result = clean_result[7:]  # Remove ```json
+            if clean_result.endswith("```"):
+                clean_result = clean_result[:-3]  # Remove ```
+            clean_result = clean_result.strip()
+            
+            fact_data = json.loads(clean_result)
             accuracy_score = fact_data.get("accuracy_score", 0.0)
-            return accuracy_score, MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model), judge_input_tokens, judge_output_tokens
+            # Ensure score is in decimal format (0-1 range) for frontend percentage conversion
+            if accuracy_score > 1.0:
+                accuracy_score = accuracy_score / 100.0
+            
+            # Extract detailed judge components for richer metrics
+            reasoning = fact_data.get("reasoning", "No detailed reasoning provided")
+            
+            # Extract claims from the new judge format (critical_errors, moderate_issues)
+            factual_claims = fact_data.get("factual_claims", [])
+            accurate_claims = fact_data.get("accurate_claims", [])
+            inaccurate_claims = fact_data.get("inaccurate_claims", [])
+            
+            # Parse new judge format with critical_errors and moderate_issues
+            critical_errors = fact_data.get("critical_errors", [])
+            moderate_issues = fact_data.get("moderate_issues", [])
+            
+            # If using new format, map to our display structure
+            if critical_errors or moderate_issues:
+                if critical_errors:
+                    inaccurate_claims.extend(critical_errors)
+                if moderate_issues:
+                    factual_claims.extend(moderate_issues)
+                # If we have specific errors/issues, assume some baseline accuracy
+                if not inaccurate_claims and moderate_issues:
+                    accurate_claims = ["Response contains some accurate information"]
+            
+            # Fallback: Extract insights from reasoning if all claims are still empty
+            elif not factual_claims and not accurate_claims and not inaccurate_claims and reasoning:
+                # Extract key insights from reasoning text
+                if "contradiction" in reasoning.lower() or "incorrect" in reasoning.lower():
+                    inaccurate_claims = ["Critical factual contradiction identified in response"]
+                if "accurate" in reasoning.lower() or "correct" in reasoning.lower():
+                    accurate_claims = ["Some information provided is accurate"]
+                if "omits" in reasoning.lower() or "missing" in reasoning.lower():
+                    factual_claims = ["Response missing essential information"]
+                elif "provides" in reasoning.lower() or "states" in reasoning.lower():
+                    factual_claims = ["Response makes specific factual claims"]
+            
+            judge_breakdown = {
+                "accuracy_score": accuracy_score,
+                "factual_claims": factual_claims,
+                "accurate_claims": accurate_claims,
+                "inaccurate_claims": inaccurate_claims,
+                "judge_reasoning": reasoning,
+                "judge_model_name": MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model),
+                "judge_tokens": {
+                    "input": judge_input_tokens,
+                    "output": judge_output_tokens
+                }
+            }
+            return judge_breakdown
         except json.JSONDecodeError:
             # Fallback: try to extract score from text
             if "accuracy_score" in fact_result:
                 import re
                 score_match = re.search(r'"accuracy_score":\s*([0-9.]+)', fact_result)
                 if score_match:
-                    return float(score_match.group(1)), MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model), judge_input_tokens, judge_output_tokens
-            return 0.0, MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model), judge_input_tokens, judge_output_tokens
+                    score = float(score_match.group(1))
+                    # Ensure score is in decimal format (0-1 range) for frontend percentage conversion
+                    if score > 1.0:
+                        score = score / 100.0
+                    
+                    # Return minimal breakdown for fallback case
+                    return {
+                        "accuracy_score": score,
+                        "factual_claims": ["Could not parse detailed claims"],
+                        "accurate_claims": ["Could not parse"],
+                        "inaccurate_claims": ["Could not parse"],
+                        "judge_reasoning": f"Fallback parsing from text: {fact_result[:200]}...",
+                        "judge_model_name": MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model),
+                        "judge_tokens": {"input": judge_input_tokens, "output": judge_output_tokens}
+                    }
+            
+            # Complete fallback
+            return {
+                "accuracy_score": 0.0,
+                "factual_claims": ["No claims could be extracted"],
+                "accurate_claims": [],
+                "inaccurate_claims": ["Unable to parse judge response"],
+                "judge_reasoning": f"Failed to parse: {fact_result[:200]}...",
+                "judge_model_name": MODEL_ID_TO_NAME_MAP.get(fact_checker_model, fact_checker_model),
+                "judge_tokens": {"input": judge_input_tokens, "output": judge_output_tokens}
+            }
             
     except Exception as e:
         # Track error for judge model
         judge_tracker.track_error()
         logging.error(f"Factual accuracy check failed: {e}")
-        return 0.0, None, None, None
+        return {
+            "accuracy_score": 0.0,
+            "factual_claims": ["Error occurred during fact checking"],
+            "accurate_claims": [],
+            "inaccurate_claims": [f"Error: {str(e)}"],
+            "judge_reasoning": f"Factual accuracy check failed: {str(e)}",
+            "judge_model_name": None,
+            "judge_tokens": {"input": None, "output": None}
+        }
 
 # ── main loop ────────────────────────────────────────────────────────────────
 def main(ai_client: LDAIClient, bedrock, bedrock_agent) -> None:
@@ -621,9 +714,15 @@ def main(ai_client: LDAIClient, bedrock, bedrock_agent) -> None:
         print_box("ASSISTANT", reply_txt)
 
         # ── factual accuracy check ────────────────────────────────────────────
-        factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context, ai_client, bedrock)
+        judge_breakdown = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context, ai_client, bedrock)
+        factual_accuracy = judge_breakdown.get("accuracy_score")
+        judge_model_name = judge_breakdown.get("judge_model_name") 
+        judge_input_tokens = judge_breakdown.get("judge_tokens", {}).get("input")
+        judge_output_tokens = judge_breakdown.get("judge_tokens", {}).get("output")
+        
         if factual_accuracy is not None:
             logging.info(f"Accuracy score: {factual_accuracy:.3f}")
+            logging.info(f"Judge reasoning: {judge_breakdown.get('judge_reasoning', '')[:100]}...")
 
         # ── feedback ──────────────────────────────────────────────────────────
         print_box("FEEDBACK", "👍  Was this helpful? (y/n)")

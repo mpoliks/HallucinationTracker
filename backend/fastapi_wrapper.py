@@ -23,7 +23,7 @@ from ldai.client import LDAIClient, AIConfig, ModelConfig
 from ldai.tracker import FeedbackKind
 
 # Import functions from your existing script
-from .script import (
+from script import (
     get_kb_passages, 
     build_guardrail_prompt, 
     map_messages, 
@@ -31,7 +31,7 @@ from .script import (
     check_factual_accuracy,
     validate_response_for_user
 )
-from .user_service import get_current_user_context, get_user_service
+from user_service import get_current_user_context, get_user_service
 
 # Load environment
 dotenv.load_dotenv()
@@ -381,7 +381,7 @@ async def chat_endpoint(request: ChatRequest):
         reply_txt = validate_response_for_user(reply_txt, context)
         
         # Perform factual accuracy check and include in response metrics
-        factual_accuracy, judge_model_name, judge_input_tokens, judge_output_tokens = await asyncio.to_thread(
+        judge_breakdown = await asyncio.to_thread(
             check_factual_accuracy,
             source_passages=passages,
             response_text=reply_txt,
@@ -392,15 +392,19 @@ async def chat_endpoint(request: ChatRequest):
             bedrock=bedrock
         )
 
-        # Add factual accuracy metrics to the response
+        # Add detailed judge breakdown to metrics
+        factual_accuracy = judge_breakdown.get("accuracy_score")
         if factual_accuracy is not None:
             metrics["factual_accuracy_score"] = factual_accuracy
-        if judge_model_name is not None:
-            metrics["judge_model_name"] = judge_model_name
-        if judge_input_tokens is not None:
-            metrics["judge_input_tokens"] = judge_input_tokens
-        if judge_output_tokens is not None:
-            metrics["judge_output_tokens"] = judge_output_tokens
+        
+        # Add all judge components to metrics for rich frontend display
+        metrics["judge_model_name"] = judge_breakdown.get("judge_model_name")
+        metrics["judge_input_tokens"] = judge_breakdown.get("judge_tokens", {}).get("input")
+        metrics["judge_output_tokens"] = judge_breakdown.get("judge_tokens", {}).get("output")
+        metrics["judge_reasoning"] = judge_breakdown.get("judge_reasoning")
+        metrics["factual_claims"] = judge_breakdown.get("factual_claims", [])
+        metrics["accurate_claims"] = judge_breakdown.get("accurate_claims", [])
+        metrics["inaccurate_claims"] = judge_breakdown.get("inaccurate_claims", [])
 
         logging.info(f"Final metrics object after factual check: {json.dumps(metrics, indent=2)}")
         
