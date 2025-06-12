@@ -282,12 +282,15 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         context_dict = context.to_dict()
         prompt = build_guardrail_prompt(passages, request.userInput, context_dict)
 
-        # Assemble conversation in Bedrock's expected format
+        # Embed the user question inside the grounding source so the relevance filter
+        # can evaluate the Q-A pair against the same context block.
+        combined_grounding_text = f"QUESTION: {request.userInput}\n\n{passages}"
+
         user_content = [
             {
                 "guardContent": {
                     "text": {
-                        "text": passages,
+                        "text": combined_grounding_text,
                         "qualifiers": ["grounding_source"]
                     }
                 }
@@ -703,12 +706,15 @@ async def chat_endpoint_async(request: ChatRequest, background_tasks: Background
         
         prompt = build_guardrail_prompt(passages, request.userInput, context_dict)
 
-        # Assemble conversation in Bedrock's expected format
+        # Embed the user question inside the grounding source so the relevance filter
+        # can evaluate the Q-A pair against the same context block.
+        combined_grounding_text = f"QUESTION: {request.userInput}\n\n{passages}"
+
         user_content = [
             {
                 "guardContent": {
                     "text": {
-                        "text": passages,
+                        "text": combined_grounding_text,
                         "qualifiers": ["grounding_source"]
                     }
                 }
