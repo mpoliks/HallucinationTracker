@@ -12,6 +12,9 @@ A comprehensive RAG (Retrieval-Augmented Generation) chatbot system for ToggleBa
 
 ### Running the Application
 
+Run make or make reset. 
+Or if you wanna do it manual-style --->
+
 1. **Start the Frontend** (Next.js):
    ```bash
    npm install
