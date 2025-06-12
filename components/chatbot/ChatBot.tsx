@@ -57,6 +57,52 @@ function ChatBotInterface({
 	const [actualModelName, setActualModelName] = useState<string | null>(null);
 	const [lastMetrics, setLastMetrics] = useState<ChatBotAIApiResponseInterface['metrics'] | null>(null);
 	const [showMetrics, setShowMetrics] = useState(false);
+	const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
+	const [inputDisabled, setInputDisabled] = useState(false);
+	const [metricsPollingInterval, setMetricsPollingInterval] = useState<NodeJS.Timeout | null>(null);
+
+	// Function to poll for metrics
+	const pollForMetrics = useCallback(async (requestId: string) => {
+		try {
+			const response = await fetch(`/api/chat-metrics?request_id=${requestId}`);
+			if (!response.ok) {
+				throw new Error(`Metrics API error: ${response.status}`);
+			}
+			
+			const data = await response.json();
+			
+			if (data.status === "ready" && data.metrics) {
+				// We have metrics! Update state and stop polling
+				setLastMetrics(data.metrics);
+				setInputDisabled(false);
+				
+				if (metricsPollingInterval) {
+					clearInterval(metricsPollingInterval);
+					setMetricsPollingInterval(null);
+				}
+				
+				console.log("Metrics received:", data.metrics);
+			} else if (data.status === "unknown") {
+				// Request ID not found, stop polling
+				console.warn("Request ID not found in backend");
+				setInputDisabled(false);
+				
+				if (metricsPollingInterval) {
+					clearInterval(metricsPollingInterval);
+					setMetricsPollingInterval(null);
+				}
+			}
+			// If status is "pending", we continue polling
+		} catch (error) {
+			console.error("Error polling for metrics:", error);
+			setInputDisabled(false);
+			
+			if (metricsPollingInterval) {
+				clearInterval(metricsPollingInterval);
+				setMetricsPollingInterval(null);
+			}
+		}
+	}, [metricsPollingInterval]);
 
 	const submitChatBotQuery = async () => {
 		if (!userInput.trim()) return; // Do not send empty messages
@@ -64,6 +110,7 @@ function ChatBotInterface({
 		const currentInput = userInput; // Capture the current input
 		setIsLoading(true);
 		setUserInput(""); // Clear the input field immediately
+		setInputDisabled(true); // Disable input until metrics arrive
 
 		// Display the user's message right away
 		const userMessage: ChatBotMessageInterface = {
@@ -103,6 +150,26 @@ function ChatBotInterface({
 			const data: ChatBotAIApiResponseInterface = await response.json();
 	
 			applyChatBotNewMessage(data);
+			
+			// Handle async metrics if pendingMetrics is true
+			if (data.pendingMetrics && data.requestId) {
+				setCurrentRequestId(data.requestId);
+				
+				// Clear any existing polling interval
+				if (metricsPollingInterval) {
+					clearInterval(metricsPollingInterval);
+				}
+				
+				// Start polling for metrics
+				const interval = setInterval(() => {
+					pollForMetrics(data.requestId);
+				}, 1000); // Poll every second
+				
+				setMetricsPollingInterval(interval);
+			} else {
+				// If metrics came back immediately, enable input
+				setInputDisabled(false);
+			}
 		} catch (error) {
 			console.error("Chat query failed:", error);
 			const errorMessage: ChatBotMessageInterface = {
@@ -113,6 +180,7 @@ function ChatBotInterface({
 			setMessages(prevMessages => 
 				prevMessages.filter(m => m.content !== 'loading').concat(errorMessage)
 			);
+			setInputDisabled(false);
 		} finally {
 			setIsLoading(false);
 		}
@@ -258,6 +326,15 @@ function ChatBotInterface({
 		// Default to AI Assistant until we get actual model name from API
 		return "AI Assistant";
 	};
+
+	// Clean up polling interval on unmount
+	useEffect(() => {
+		return () => {
+			if (metricsPollingInterval) {
+				clearInterval(metricsPollingInterval);
+			}
+		};
+	}, [metricsPollingInterval]);
 
 	return (
 		<>
@@ -563,28 +640,29 @@ function ChatBotInterface({
 						</CardContent>
 						<CardFooter className="p-4 lg:p-6" ref={chatFooterRef}>
 							<form
+								onSubmit={(e) => {
+									e.preventDefault();
+									submitChatBotQuery();
+								}}
 								className="flex w-full items-center space-x-2"
 							>
 								<Input
+									id="message"
 									placeholder="Type your message..."
-									className="pr-12"
+									className="flex-1"
+									autoComplete="off"
 									value={userInput}
 									onChange={handleInputChange}
-									onKeyDown={(e) => {
-										if (e.key === "Enter") {
-											submitChatBotQuery();
-										}
-									}}
-									disabled={isLoading}
+									disabled={isLoading || inputDisabled}
 								/>
 								<Button
 									type="submit"
-									className="absolute right-2 top-1/2 -translate-y-1/2"
 									size="icon"
+									disabled={isLoading || !userInput.trim() || inputDisabled}
 									onClick={submitChatBotQuery}
-									disabled={isLoading}
 								>
-									<SendIcon className="h-5 w-5" />
+									<SendIcon className="h-4 w-4" />
+									<span className="sr-only">Send</span>
 								</Button>
 							</form>
 						</CardFooter>

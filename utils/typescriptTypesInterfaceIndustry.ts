@@ -43,6 +43,8 @@ export interface ChatBotAIApiResponseInterface {
 	response: string;
 	enabled: boolean;
 	modelName: string;
+	requestId?: string;
+	pendingMetrics?: boolean;
 	metrics?: {
 		grounding_score?: number;
 		grounding_threshold?: number;

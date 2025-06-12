@@ -21,7 +21,7 @@ export default async function chatResponse(req: NextApiRequest, res: NextApiResp
         // Call our Python FastAPI backend instead of Bedrock directly
         const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
         
-        const response = await fetch(`${pythonApiUrl}/api/chat`, {
+        const response = await fetch(`${pythonApiUrl}/api/chat-async`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -44,6 +44,8 @@ export default async function chatResponse(req: NextApiRequest, res: NextApiResp
             enabled: pythonResponse.enabled,
             error: pythonResponse.error,
             metrics: pythonResponse.metrics,
+            requestId: pythonResponse.requestId,
+            pendingMetrics: pythonResponse.pendingMetrics
         };
 
         res.status(200).json(data);

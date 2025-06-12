@@ -293,7 +293,7 @@ MODEL_ID_TO_NAME_MAP = {
     "us.anthropic.claude-sonnet-4-20250514-v1:0": "Claude Sonnet"
 }
 
-def check_factual_accuracy(source_passages: str, response_text: str, generator_model_id: str, custom_params: dict, context: Context, ai_client: LDAIClient, bedrock) -> dict:
+def check_factual_accuracy(source_passages: str, response_text: str, user_question: str, generator_model_id: str, custom_params: dict, context: Context, ai_client: LDAIClient, bedrock) -> dict:
     """
     Check factual accuracy by extracting and comparing key facts
     Returns a tuple containing: (score, judge_model_name, judge_input_tokens, judge_output_tokens)
@@ -321,6 +321,7 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
     judge_variables = {
         "source_passages": source_passages,
         "response_text": response_text,
+        "user_question": user_question,  # Include the original user question
         "user_context": context.name or "Anonymous User"  # Get from LaunchDarkly context
     }
     
@@ -335,6 +336,9 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
     
     fact_check_prompt = judge_cfg.messages[0].content
 
+    # Debug: Log what prompt is actually being sent to the judge
+    logging.info(f"Judge prompt being sent: {fact_check_prompt[:500]}...")
+    logging.info(f"Judge variables passed: {judge_variables}")
     
     # Execute fact-checking
 
@@ -417,8 +421,12 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
                 elif "provides" in reasoning.lower() or "states" in reasoning.lower():
                     factual_claims = ["Response makes specific factual claims"]
             
+            hallucination_score = max(0.0, min(1.0, 1 - accuracy_score))
+
             judge_breakdown = {
+                "hallucination_score": hallucination_score,
                 "accuracy_score": accuracy_score,
+                "factual_accuracy_score": accuracy_score,
                 "factual_claims": factual_claims,
                 "accurate_claims": accurate_claims,
                 "inaccurate_claims": inaccurate_claims,
@@ -443,7 +451,9 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
                     
                     # Return minimal breakdown for fallback case
                     return {
+                        "hallucination_score": 1.0,
                         "accuracy_score": score,
+                        "factual_accuracy_score": score,
                         "factual_claims": ["Could not parse detailed claims"],
                         "accurate_claims": ["Could not parse"],
                         "inaccurate_claims": ["Could not parse"],
@@ -454,7 +464,9 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
             
             # Complete fallback
             return {
+                "hallucination_score": 1.0,
                 "accuracy_score": 0.0,
+                "factual_accuracy_score": 0.0,
                 "factual_claims": ["No claims could be extracted"],
                 "accurate_claims": [],
                 "inaccurate_claims": ["Unable to parse judge response"],
@@ -468,7 +480,9 @@ def check_factual_accuracy(source_passages: str, response_text: str, generator_m
         judge_tracker.track_error()
         logging.error(f"Factual accuracy check failed: {e}")
         return {
+            "hallucination_score": 1.0,
             "accuracy_score": 0.0,
+            "factual_accuracy_score": 0.0,
             "factual_claims": ["Error occurred during fact checking"],
             "accurate_claims": [],
             "inaccurate_claims": [f"Error: {str(e)}"],
@@ -714,7 +728,7 @@ def main(ai_client: LDAIClient, bedrock, bedrock_agent) -> None:
         print_box("ASSISTANT", reply_txt)
 
         # ── factual accuracy check ────────────────────────────────────────────
-        judge_breakdown = check_factual_accuracy(passages, reply_txt, model_id, custom_params, context, ai_client, bedrock)
+        judge_breakdown = check_factual_accuracy(passages, reply_txt, user, model_id, custom_params, context, ai_client, bedrock)
         factual_accuracy = judge_breakdown.get("accuracy_score")
         judge_model_name = judge_breakdown.get("judge_model_name") 
         judge_input_tokens = judge_breakdown.get("judge_tokens", {}).get("input")
