@@ -164,15 +164,28 @@ def get_kb_passages(question: str, kb_id: str, bedrock_agent, user_context: Cont
                     continue
                 
                 # For tier-specific information, only include relevant tiers
-                if any(tier in passage_lower for tier in ["diamond", "platinum", "gold", "silver"]):
-                    # Check if passage mentions current user's tier or is generic advice
-                    if (current_user_tier in passage_lower or 
-                        "tiers receive" in passage_lower or  # Generic tier info
-                        not any(other_tier in passage_lower for other_tier in 
-                               ["diamond", "platinum", "gold", "silver"] if other_tier != current_user_tier)):
+                if any(tier_word in passage_lower for tier_word in ["diamond", "platinum", "gold", "silver"]):
+                    # Keep only if it explicitly references the *current* tier or is a purely generic statement.
+                    # We now treat any reference to other tiers as out-of-scope, even if the sentence
+                    # contains a phrase like "tiers receive". This prevents the guardrail from rejecting
+                    # a response that might accidentally surface benefits for the wrong tier.
+
+                    mentions_current_tier = current_user_tier and current_user_tier in passage_lower
+                    mentions_other_tiers = any(
+                        other_tier in passage_lower for other_tier in [
+                            "diamond",
+                            "platinum",
+                            "gold",
+                            "silver",
+                        ] if other_tier != current_user_tier
+                    )
+
+                    if mentions_current_tier and not mentions_other_tiers:
                         filtered_passages.append(passage)
                     else:
-                        logging.info(f"Filtered out tier-specific info not relevant to {current_user_tier}: {passage[:50]}...")
+                        logging.info(
+                            f"Filtered out tier-specific info not relevant to {current_user_tier}: {passage[:70]}..."
+                        )
                         continue
                 else:
                     # Generic information, include it
