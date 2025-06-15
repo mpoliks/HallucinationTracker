@@ -54,11 +54,23 @@ class UserService:
                 "average_balance": "10k-25k",
                 "preferred_channel": "mobile",
                 "language": "en"
+            },
+            "kai_al_rashid": {
+                "user_id": "user_kai_al_rashid",
+                "name": "Kai Al-Rashid",
+                "location": "Omaha, NE",
+                "tier": "Platinum",
+                "userName": "Kai Al-Rashid",
+                "email": "kai.alrashid@example.com",
+                "account_since": "2016-09-23",
+                "average_balance": "50k-100k",
+                "preferred_channel": "phone",
+                "language": "de"
             }
         }
         
-        # Default user for demo purposes
-        self.current_user_key = "catherine_liu"
+        # Default user for demo purposes – switched to a tier/balance-consistent profile
+        self.current_user_key = "kai_al_rashid"
         
     def get_current_user_profile(self) -> Dict[str, Any]:
         """

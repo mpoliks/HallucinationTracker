@@ -8,6 +8,7 @@ A comprehensive RAG (Retrieval-Augmented Generation) chatbot system for ToggleBa
 - Python 3.9+
 - Node.js 18+
 - AWS CLI configured with SSO profile 'marek'
+  (refresh token anytime with `aws sso login --profile marek`)
 - LaunchDarkly account with AI configs
 
 ### Running the Application
