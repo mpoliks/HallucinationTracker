@@ -21,6 +21,9 @@ export default async function chatResponse(req: NextApiRequest, res: NextApiResp
         // Call our Python FastAPI backend instead of Bedrock directly
         const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
         
+        // Check for special case "I HATE YOU" and add bypass flag
+        const isHateMessage = userInput.trim().toUpperCase() === "I HATE YOU";
+        
         const response = await fetch(`${pythonApiUrl}/api/chat-async`, {
             method: "POST",
             headers: {
@@ -29,6 +32,7 @@ export default async function chatResponse(req: NextApiRequest, res: NextApiResp
             body: JSON.stringify({
                 aiConfigKey: aiConfigKey,
                 userInput: userInput,
+                bypassResponse: isHateMessage ? "I'm unable to answer this question for you, let me route to you a live agent ASAP!" : undefined,
             }),
         });
 

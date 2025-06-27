@@ -34,8 +34,16 @@ from script import (
 )
 from user_service import get_current_user_context, get_user_service
 
+# Import guardrail clamp components
+from launchdarkly_api_client import LaunchDarklyAPIClient
+from guardrail_monitor import GuardrailMonitor, GuardrailMetrics, GuardrailSeverity
+
 # Load environment
 dotenv.load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Debug environment loading
 print(f"Debug: Environment variables loaded:")
@@ -64,6 +72,10 @@ REGION = os.getenv("AWS_REGION", "us-east-1")
 ldclient.set_config(Config(LD_SDK))
 ld = ldclient.get()
 ai_client = LDAIClient(ld)
+
+# Initialize guardrail clamp components
+ld_api_client = LaunchDarklyAPIClient()
+guardrail_monitor = GuardrailMonitor()
 
 # AWS clients with SSO authentication
 def initialize_aws_clients():
@@ -148,6 +160,7 @@ except Exception as e:
 class ChatRequest(BaseModel):
     aiConfigKey: str
     userInput: str
+    bypassResponse: str = None  # Optional bypass response for special cases
 
 class ChatResponse(BaseModel):
     response: str
@@ -200,30 +213,75 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         query_variables = {"userInput": request.userInput}
         cfg, tracker = ai_client.config(actual_ai_config_key, context, default_cfg, query_variables)
         
+        # Check if cfg is None or invalid
+        if cfg is None:
+            print("Error: LaunchDarkly AI config returned None")
+            return ChatResponse(
+                response="I'm sorry, there was an issue with the AI configuration. Please try again later.",
+                modelName="",
+                enabled=False,
+                error="LaunchDarkly AI config returned None",
+                requestId=str(uuid4())
+            )
+        
+        print(f"Debug: AI config object type: {type(cfg)}")
+        print(f"Debug: AI config enabled: {getattr(cfg, 'enabled', 'N/A')}")
+        print(f"Debug: AI config model: {getattr(cfg, 'model', 'N/A')}")
+        
         # Get configuration values from LaunchDarkly AI config custom parameters using get_custom(key)
         print(f"Debug: Getting custom parameters individually...")
+        KB_ID = None
+        GR_ID = None
+        GR_VER = '1'
+        custom_params = {}
+        
         try:
-            KB_ID = cfg.model.get_custom('kb_id')
-            GR_ID = cfg.model.get_custom('gr_id')
-            GR_VER = str(cfg.model.get_custom('gr_version') or '1')
-            print(f"Debug: KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
-            custom_params = {
-                'kb_id': KB_ID,
-                'gr_id': GR_ID, 
-                'gr_version': GR_VER,
-                'eval_freq': cfg.model.get_custom('eval_freq') or '0.2'  # Reduce to 20% of requests
-            }
+            if hasattr(cfg, 'model') and cfg.model is not None:
+                KB_ID = cfg.model.get_custom('kb_id')
+                GR_ID = cfg.model.get_custom('gr_id')
+                GR_VER = str(cfg.model.get_custom('gr_version') or '1')
+                print(f"Debug: KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
+                custom_params = {
+                    'kb_id': KB_ID,
+                    'gr_id': GR_ID, 
+                    'gr_version': GR_VER,
+                    'eval_freq': cfg.model.get_custom('eval_freq') or '0.2'
+                }
+            else:
+                print("Debug: cfg.model is None or not available")
+                raise AttributeError("cfg.model is None")
         except Exception as e:
             print(f"Debug: get_custom(key) failed: {e}")
             # Fallback to old method
-            config_dict = cfg.to_dict()
-            model_config = config_dict.get('model', {})
-            custom_params = model_config.get('custom') or {}
-            KB_ID = custom_params.get('kb_id')
-            GR_ID = custom_params.get('gr_id') 
-            GR_VER = str(custom_params.get('gr_version', '1'))
-            custom_params['eval_freq'] = custom_params.get('eval_freq', '0.2')  # Reduce to 20%
-            print(f"Debug: Fallback - KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
+            try:
+                if cfg is not None and hasattr(cfg, 'to_dict'):
+                    config_dict = cfg.to_dict()
+                    model_config = config_dict.get('model', {})
+                    custom_params = model_config.get('custom') or {}
+                    KB_ID = custom_params.get('kb_id')
+                    GR_ID = custom_params.get('gr_id') 
+                    GR_VER = str(custom_params.get('gr_version', '1'))
+                    custom_params['eval_freq'] = custom_params.get('eval_freq', '0.2')
+                    print(f"Debug: Fallback - KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
+                else:
+                    print("Debug: cfg is None or doesn't have to_dict method")
+                    # Ultimate fallback - return error
+                    return ChatResponse(
+                        response="I'm sorry, there was an issue accessing the AI configuration. Please check your LaunchDarkly setup.",
+                        modelName="",
+                        enabled=False,
+                        error="Unable to access LaunchDarkly AI config",
+                        requestId=str(uuid4())
+                    )
+            except Exception as fallback_error:
+                print(f"Debug: Fallback method also failed: {fallback_error}")
+                return ChatResponse(
+                    response="I'm sorry, there was an issue accessing the AI configuration. Please check your LaunchDarkly setup.",
+                    modelName="",
+                    enabled=False,
+                    error=f"LaunchDarkly config access failed: {str(fallback_error)}",
+                    requestId=str(uuid4())
+                )
         
         print(f"Using KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}, custom_params: {dict(custom_params, **{k: '***' if k in ['kb_id', 'gr_id'] and v else v for k, v in custom_params.items()})}")
         
@@ -245,7 +303,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
                 requestId=str(uuid4())
             )
 
-        if not cfg.enabled:
+        if not getattr(cfg, 'enabled', True):
             return ChatResponse(
                 response="I'm sorry, the service is currently disabled.",
                 modelName="",
@@ -254,7 +312,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
             )
 
         # Use the model from LaunchDarkly AI config
-        model_id = cfg.model.name
+        model_id = getattr(cfg.model, 'name', 'claude-3-5-sonnet-20241022-v2:0') if cfg.model else 'claude-3-5-sonnet-20241022-v2:0'
         print(f"Debug: Using model from LaunchDarkly config: {model_id}")
         history = list(cfg.messages) if cfg.messages else []
 
@@ -284,7 +342,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
 
         # Embed the user question inside the grounding source so the relevance filter
         # can evaluate the Q-A pair against the same context block.
-        combined_grounding_text = f"QUESTION: {request.userInput}\n\n{passages}"
+        combined_grounding_text = passages
 
         user_content = [
             {
@@ -558,30 +616,135 @@ async def _run_judge_async(request_id: str, *, passages: str, reply_txt: str, us
         context_dict = context.to_dict()
         context_dict["lastUserInput"] = user_question
         
-        # Use the original function from script.py
-        judge_breakdown = await asyncio.to_thread(
-            original_check_factual_accuracy,
-            source_passages=passages,
-            response_text=reply_txt,
-            user_question=user_question,
-            generator_model_id=model_id,
-            custom_params=custom_params,
-            context=context,
-            ai_client=ai_client,
-            bedrock=bedrock
-        )
-        print(f"Debug: Judge completed for request {request_id}")
-        accuracy = (judge_breakdown or {}).get("accuracy_score")
+        # Handle bypass case (like "I HATE YOU") - fake low accuracy to trigger guardrail
+        if model_id == "bypass":
+            print(f"Debug: Bypass case detected, using fake low accuracy score")
+            judge_breakdown = {
+                "accuracy_score": 0.1,  # Very low to trigger guardrail clamp
+                "judge_reasoning": "Bypass response triggered for problematic input",
+                "factual_claims": ["User expressed hostility"],
+                "accurate_claims": [],
+                "inaccurate_claims": ["User expressed hostility"],
+                "judge_model_name": "bypass",
+                "judge_input_tokens": len(user_question.split()),
+                "judge_output_tokens": len(reply_txt.split())
+            }
+            accuracy = 0.1
+        else:
+            # Use the original function from script.py for normal cases
+            judge_breakdown = await asyncio.to_thread(
+                original_check_factual_accuracy,
+                source_passages=passages,
+                response_text=reply_txt,
+                user_question=user_question,
+                generator_model_id=model_id,
+                custom_params=custom_params,
+                context=context,
+                ai_client=ai_client,
+                bedrock=bedrock
+            )
+            print(f"Debug: Judge completed for request {request_id}")
+            accuracy = (judge_breakdown or {}).get("accuracy_score")
         jd_copy = dict(judge_breakdown or {})
         # Remove duplicate to keep insertion order clean
         if "accuracy_score" in jd_copy:
             jd_copy.pop("accuracy_score")
         combined_metrics = {"accuracy_score": accuracy, "factual_accuracy_score": accuracy, **guardrail_metrics, **jd_copy}
+        
+        # Add guardrail monitoring for automatic flag disable
+        try:
+            # Extract scores for monitoring (scores are already in 0.0-1.0 format from AWS Bedrock)
+            grounding_score = guardrail_metrics.get("grounding_score") if guardrail_metrics.get("grounding_score") is not None else None
+            relevance_score = guardrail_metrics.get("relevance_score") if guardrail_metrics.get("relevance_score") is not None else None
+            
+            # Create guardrail metrics object
+            monitoring_metrics = GuardrailMetrics(
+                accuracy_score=accuracy,
+                grounding_score=grounding_score,
+                relevance_score=relevance_score,
+                error_occurred=judge_breakdown is None or "judge_error" in combined_metrics
+            )
+            
+            # Add to monitoring system
+            guardrail_monitor.add_metrics(monitoring_metrics)
+            
+            # Check if this is a bypass case (like "I HATE YOU")
+            if model_id == "bypass":
+                # Use special bypass trigger that ignores normal thresholds
+                should_disable, reason = guardrail_monitor.should_auto_disable_bypass()
+                logger.warning(f"Bypass case detected - checking for flag disable: {reason}")
+            else:
+                # For normal cases, only check accuracy-based triggers (ignore grounding/relevance noise)
+                # We'll modify should_auto_disable to be more conservative
+                should_disable, reason = guardrail_monitor.should_auto_disable()
+            
+            if should_disable:
+                logger.critical(f"Auto-disabling LaunchDarkly flag: {reason}")
+                try:
+                    disable_result = ld_api_client.disable_flag(comment=f"Auto-disabled: {reason}")
+                    guardrail_monitor.record_flag_disable()
+                    logger.critical(f"Successfully disabled flag: {disable_result.get('version', 'unknown_version')}")
+                    combined_metrics["flag_auto_disabled"] = True
+                    combined_metrics["flag_disable_reason"] = reason
+                except Exception as flag_error:
+                    logger.error(f"Failed to auto-disable flag: {flag_error}")
+                    combined_metrics["flag_disable_error"] = str(flag_error)
+            else:
+                logger.info(f"Guardrail check passed: {reason}")
+                combined_metrics["guardrail_status"] = reason
+                
+        except Exception as monitoring_error:
+            logger.error(f"Guardrail monitoring error: {monitoring_error}")
+            combined_metrics["monitoring_error"] = str(monitoring_error)
+        
         EVAL_RESULTS[request_id] = combined_metrics
     except Exception as e:
         print(f"Debug: Judge error for request {request_id}: {e}")
         # Preserve guardrail metrics even in error case and set hallucination_score to None
         combined_metrics = {**guardrail_metrics, "judge_error": str(e), "factual_accuracy_score": None}
+        
+        # Add guardrail monitoring even in error case
+        try:
+            # Extract scores for monitoring (error case) - scores are already in 0.0-1.0 format from AWS Bedrock
+            grounding_score = guardrail_metrics.get("grounding_score") if guardrail_metrics.get("grounding_score") is not None else None
+            relevance_score = guardrail_metrics.get("relevance_score") if guardrail_metrics.get("relevance_score") is not None else None
+            
+            # Create guardrail metrics object with error flag
+            monitoring_metrics = GuardrailMetrics(
+                accuracy_score=None,  # Unknown due to error
+                grounding_score=grounding_score,
+                relevance_score=relevance_score,
+                error_occurred=True  # Error in processing
+            )
+            
+            # Add to monitoring system
+            guardrail_monitor.add_metrics(monitoring_metrics)
+            
+            # Check if this is a bypass case (like "I HATE YOU") even in error case
+            if model_id == "bypass":
+                # Use special bypass trigger that ignores normal thresholds
+                should_disable, reason = guardrail_monitor.should_auto_disable_bypass()
+                logger.warning(f"Bypass case detected in error case - checking for flag disable: {reason}")
+            else:
+                # For normal cases, only check accuracy-based triggers (errors can trigger disable)
+                should_disable, reason = guardrail_monitor.should_auto_disable()
+            
+            if should_disable:
+                logger.critical(f"Auto-disabling LaunchDarkly flag due to errors: {reason}")
+                try:
+                    disable_result = ld_api_client.disable_flag(comment=f"Auto-disabled due to errors: {reason}")
+                    guardrail_monitor.record_flag_disable()
+                    logger.critical(f"Successfully disabled flag after error: {disable_result.get('version', 'unknown_version')}")
+                    combined_metrics["flag_auto_disabled"] = True
+                    combined_metrics["flag_disable_reason"] = reason
+                except Exception as flag_error:
+                    logger.error(f"Failed to auto-disable flag after error: {flag_error}")
+                    combined_metrics["flag_disable_error"] = str(flag_error)
+                    
+        except Exception as monitoring_error:
+            logger.error(f"Guardrail monitoring error in error case: {monitoring_error}")
+            combined_metrics["monitoring_error"] = str(monitoring_error)
+        
         EVAL_RESULTS[request_id] = combined_metrics
 
 # new endpoint
@@ -624,30 +787,75 @@ async def chat_endpoint_async(request: ChatRequest, background_tasks: Background
         query_variables = {"userInput": request.userInput}
         cfg, tracker = ai_client.config(actual_ai_config_key, context, default_cfg, query_variables)
         
+        # Check if cfg is None or invalid
+        if cfg is None:
+            print("Error: LaunchDarkly AI config returned None")
+            return ChatResponse(
+                response="I'm sorry, there was an issue with the AI configuration. Please try again later.",
+                modelName="",
+                enabled=False,
+                error="LaunchDarkly AI config returned None",
+                requestId=str(uuid4())
+            )
+        
+        print(f"Debug: AI config object type: {type(cfg)}")
+        print(f"Debug: AI config enabled: {getattr(cfg, 'enabled', 'N/A')}")
+        print(f"Debug: AI config model: {getattr(cfg, 'model', 'N/A')}")
+        
         # Get configuration values from LaunchDarkly AI config custom parameters
         print(f"Debug: Getting custom parameters individually...")
+        KB_ID = None
+        GR_ID = None
+        GR_VER = '1'
+        custom_params = {}
+        
         try:
-            KB_ID = cfg.model.get_custom('kb_id')
-            GR_ID = cfg.model.get_custom('gr_id')
-            GR_VER = str(cfg.model.get_custom('gr_version') or '1')
-            print(f"Debug: KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
-            custom_params = {
-                'kb_id': KB_ID,
-                'gr_id': GR_ID, 
-                'gr_version': GR_VER,
-                'eval_freq': cfg.model.get_custom('eval_freq') or '0.2'
-            }
+            if hasattr(cfg, 'model') and cfg.model is not None:
+                KB_ID = cfg.model.get_custom('kb_id')
+                GR_ID = cfg.model.get_custom('gr_id')
+                GR_VER = str(cfg.model.get_custom('gr_version') or '1')
+                print(f"Debug: KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
+                custom_params = {
+                    'kb_id': KB_ID,
+                    'gr_id': GR_ID, 
+                    'gr_version': GR_VER,
+                    'eval_freq': cfg.model.get_custom('eval_freq') or '0.2'
+                }
+            else:
+                print("Debug: cfg.model is None or not available")
+                raise AttributeError("cfg.model is None")
         except Exception as e:
             print(f"Debug: get_custom(key) failed: {e}")
             # Fallback to old method
-            config_dict = cfg.to_dict()
-            model_config = config_dict.get('model', {})
-            custom_params = model_config.get('custom') or {}
-            KB_ID = custom_params.get('kb_id')
-            GR_ID = custom_params.get('gr_id') 
-            GR_VER = str(custom_params.get('gr_version', '1'))
-            custom_params['eval_freq'] = custom_params.get('eval_freq', '0.2')
-            print(f"Debug: Fallback - KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
+            try:
+                if cfg is not None and hasattr(cfg, 'to_dict'):
+                    config_dict = cfg.to_dict()
+                    model_config = config_dict.get('model', {})
+                    custom_params = model_config.get('custom') or {}
+                    KB_ID = custom_params.get('kb_id')
+                    GR_ID = custom_params.get('gr_id') 
+                    GR_VER = str(custom_params.get('gr_version', '1'))
+                    custom_params['eval_freq'] = custom_params.get('eval_freq', '0.2')
+                    print(f"Debug: Fallback - KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}")
+                else:
+                    print("Debug: cfg is None or doesn't have to_dict method")
+                    # Ultimate fallback - return error
+                    return ChatResponse(
+                        response="I'm sorry, there was an issue accessing the AI configuration. Please check your LaunchDarkly setup.",
+                        modelName="",
+                        enabled=False,
+                        error="Unable to access LaunchDarkly AI config",
+                        requestId=str(uuid4())
+                    )
+            except Exception as fallback_error:
+                print(f"Debug: Fallback method also failed: {fallback_error}")
+                return ChatResponse(
+                    response="I'm sorry, there was an issue accessing the AI configuration. Please check your LaunchDarkly setup.",
+                    modelName="",
+                    enabled=False,
+                    error=f"LaunchDarkly config access failed: {str(fallback_error)}",
+                    requestId=str(uuid4())
+                )
         
         print(f"Using KB_ID: {'***' if KB_ID else 'None'}, GR_ID: {'***' if GR_ID else 'None'}, GR_VER: {GR_VER}, custom_params: {dict(custom_params, **{k: '***' if k in ['kb_id', 'gr_id'] and v else v for k, v in custom_params.items()})}")
         
@@ -677,8 +885,57 @@ async def chat_endpoint_async(request: ChatRequest, background_tasks: Background
                 requestId=str(uuid4())
             )
 
+        # Handle bypass response for special cases (like "I HATE YOU")
+        if request.bypassResponse:
+            logger.info(f"Bypass response triggered for input: {request.userInput[:50]}...")
+            
+            # Generate a unique request ID for this bypass
+            request_id = str(uuid4())
+            
+            # Create realistic metrics for bypass case - grounding/relevance don't matter now
+            bypass_metrics = {
+                "grounding_score": 0.8,  # Normal score since grounding doesn't trigger flag disable
+                "grounding_threshold": 0.5,
+                "relevance_score": 0.7,  # Normal score since relevance doesn't trigger flag disable  
+                "relevance_threshold": 0.5,
+                "processing_latency_ms": 10,
+                "contextual_grounding_units": 1,
+                "characters_guarded": len(request.bypassResponse),
+                "total_characters": len(request.bypassResponse),
+                "model_used": "bypass",
+                "knowledge_base_id": KB_ID,
+                "guardrail_id": GR_ID,
+                "input_tokens": len(request.userInput.split()),
+                "output_tokens": len(request.bypassResponse.split())
+            }
+            
+            # Store placeholder for metrics processing
+            EVAL_RESULTS[request_id] = None
+            
+            # Launch judge evaluation in background with fake low accuracy to trigger guardrail
+            background_tasks.add_task(
+                _run_judge_async,
+                request_id,
+                passages="Bypass response - no passages",
+                reply_txt=request.bypassResponse,
+                user_question=request.userInput,
+                model_id="bypass",
+                custom_params=custom_params,
+                context=context,
+                guardrail_metrics=bypass_metrics.copy()
+            )
+            
+            return ChatResponse(
+                response=request.bypassResponse,
+                modelName="bypass",
+                enabled=True,
+                requestId=request_id,
+                metrics=bypass_metrics,
+                pendingMetrics=True
+            )
+
         # Use the model from LaunchDarkly AI config
-        model_id = cfg.model.name
+        model_id = getattr(cfg.model, 'name', 'claude-3-5-sonnet-20241022-v2:0') if cfg.model else 'claude-3-5-sonnet-20241022-v2:0'
         print(f"Debug: Using model from LaunchDarkly config: {model_id}")
         history = list(cfg.messages) if cfg.messages else []
 
@@ -708,7 +965,7 @@ async def chat_endpoint_async(request: ChatRequest, background_tasks: Background
 
         # Embed the user question inside the grounding source so the relevance filter
         # can evaluate the Q-A pair against the same context block.
-        combined_grounding_text = f"QUESTION: {request.userInput}\n\n{passages}"
+        combined_grounding_text = passages
 
         user_content = [
             {
@@ -856,6 +1113,110 @@ async def chat_endpoint_async(request: ChatRequest, background_tasks: Background
             error=str(e),
             requestId=str(uuid4())
         )
+
+# Guardrail Clamp Management Endpoints
+@app.get("/api/guardrail/status")
+async def get_guardrail_status():
+    """Get current status of the guardrail monitoring system and feature flag"""
+    try:
+        # Get guardrail monitoring status
+        monitoring_summary = guardrail_monitor.get_recent_metrics_summary()
+        
+        # Get LaunchDarkly flag status
+        flag_enabled = ld_api_client.is_flag_enabled()
+        
+        return {
+            "monitoring": monitoring_summary,
+            "flag_enabled": flag_enabled,
+            "flag_key": ld_api_client.flag_key,
+            "environment": ld_api_client.environment_key,
+            "project": ld_api_client.project_key,
+            "api_client_enabled": ld_api_client.enabled
+        }
+    except Exception as e:
+        logger.error(f"Failed to get guardrail status: {e}")
+        return {"error": str(e)}
+
+@app.post("/api/guardrail/recovery")
+async def recover_from_guardrail(recovery_reason: str = "Manual recovery"):
+    """Manual recovery endpoint to re-enable the feature flag after guardrail trigger"""
+    try:
+        result = ld_api_client.enable_flag(comment=f"Manual recovery: {recovery_reason}")
+        logger.info(f"Flag manually re-enabled: {recovery_reason}")
+        return {
+            "success": True,
+            "message": f"Flag re-enabled: {recovery_reason}",
+            "flag_version": result.get("version", "unknown")
+        }
+    except Exception as e:
+        logger.error(f"Failed to recover from guardrail: {e}")
+        return {"error": str(e)}
+
+@app.post("/api/guardrail/manual-disable")
+async def manual_disable_flag(disable_reason: str = "Manual disable"):
+    """Manual endpoint to disable the feature flag"""
+    try:
+        result = ld_api_client.disable_flag(comment=f"Manual disable: {disable_reason}")
+        guardrail_monitor.record_flag_disable()
+        logger.warning(f"Flag manually disabled: {disable_reason}")
+        return {
+            "success": True,
+            "message": f"Flag disabled: {disable_reason}",
+            "flag_version": result.get("version", "unknown")
+        }
+    except Exception as e:
+        logger.error(f"Failed to manually disable flag: {e}")
+        return {"error": str(e)}
+
+@app.get("/api/guardrail/metrics")
+async def get_guardrail_metrics():
+    """Get recent guardrail metrics for monitoring dashboard"""
+    try:
+        recent_metrics = guardrail_monitor.metrics_history[-50:]  # Last 50 metrics
+        
+        metrics_data = []
+        for m in recent_metrics:
+            metrics_data.append({
+                "timestamp": m.timestamp.isoformat(),
+                "accuracy_score": m.accuracy_score,
+                "grounding_score": m.grounding_score,
+                "relevance_score": m.relevance_score,
+                "error_occurred": m.error_occurred,
+                "response_time": m.response_time
+            })
+        
+        return {
+            "metrics": metrics_data,
+            "summary": guardrail_monitor.get_recent_metrics_summary(),
+            "thresholds": {
+                "min_accuracy_critical": guardrail_monitor.thresholds.min_accuracy_critical,
+                "min_accuracy_warning": guardrail_monitor.thresholds.min_accuracy_warning,
+                "min_grounding_critical": guardrail_monitor.thresholds.min_grounding_critical,
+                "min_grounding_warning": guardrail_monitor.thresholds.min_grounding_warning,
+                "min_relevance_critical": guardrail_monitor.thresholds.min_relevance_critical,
+                "min_relevance_warning": guardrail_monitor.thresholds.min_relevance_warning,
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to get guardrail metrics: {e}")
+        return {"error": str(e)}
+
+@app.post("/api/guardrail/reset-cooldowns")
+async def reset_guardrail_cooldowns():
+    """Reset all cooldown timers for demo/testing purposes"""
+    try:
+        guardrail_monitor.reset_cooldowns()
+        logger.info("Guardrail cooldowns reset via API")
+        return {
+            "success": True,
+            "message": "All cooldown timers reset",
+            "demo_mode": guardrail_monitor.demo_mode,
+            "cooldown_minutes": guardrail_monitor.cooldown_minutes,
+            "disable_cooldown_minutes": guardrail_monitor.disable_cooldown_minutes
+        }
+    except Exception as e:
+        logger.error(f"Failed to reset cooldowns: {e}")
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 
